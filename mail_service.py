@@ -48,12 +48,12 @@ def _detail_retry_attempt(state, message_id, now=None):
     record["next_retry_at"] = current + delay
     return attempt
 
-_OWN_NAMES = {'cloudmail_build_headers', 'cloudmail_preflight', 'cloudmail_wait_for_auth', 'cloudmail_get_email_and_token', 'get_messages', 'cloudflare_get_messages', 'get_yyds_api_key', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_oai_code', 'get_email_provider', 'cloudflare_get_domains', 'extract_verification_code', 'get_cloudflare_api_base', 'cloudflare_apply_auth_params', 'duckmail_get_oai_code', 'create_account', 'get_yyds_jwt', 'get_message_detail', 'yyds_create_account', 'get_duckmail_api_key', 'get_cloudflare_path', 'cloudflare_create_account', 'cloudflare_get_token', 'cloudflare_get_oai_code', 'get_cloudmail_public_token', 'generate_username', 'yyds_get_message_detail', 'cloudflare_next_default_domain', 'yyds_get_messages', 'yyds_get_token', 'get_domains', 'get_token', 'cloudflare_create_temp_address', 'get_cloudflare_api_key', 'get_cloudmail_path', 'get_cloudmail_api_base', 'cloudmail_get_oai_code', 'cloudflare_build_headers', 'cloudflare_is_admin_create_path', 'cloudmail_next_domain', 'cloudflare_get_message_detail', 'cloudmail_get_messages', 'get_user_agent', 'yyds_pick_domain', '_pick_list_payload', 'get_email_and_token', 'release_email_lease', 'get_oai_code', 'get_cloudflare_auth_mode', 'pick_domain'}
+_OWN_NAMES = {'cloudmail_build_headers', 'cloudmail_preflight', 'cloudmail_wait_for_auth', 'cloudmail_get_email_and_token', 'get_messages', 'cloudflare_get_messages', 'get_yyds_api_key', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_oai_code', 'get_email_provider', 'cloudflare_get_domains', 'extract_verification_code', 'get_cloudflare_api_base', 'cloudflare_apply_auth_params', 'duckmail_get_oai_code', 'create_account', 'get_yyds_jwt', 'get_message_detail', 'yyds_create_account', 'get_duckmail_api_key', 'get_cloudflare_path', 'cloudflare_create_account', 'cloudflare_get_token', 'cloudflare_get_oai_code', 'get_cloudmail_public_token', 'generate_username', 'yyds_get_message_detail', 'cloudflare_next_default_domain', 'yyds_get_messages', 'yyds_get_token', 'get_domains', 'get_token', 'cloudflare_create_temp_address', 'get_cloudflare_api_key', 'get_cloudmail_path', 'get_cloudmail_api_base', 'cloudmail_get_oai_code', 'cloudflare_build_headers', 'cloudflare_is_admin_create_path', 'cloudmail_next_domain', 'cloudflare_get_message_detail', 'cloudmail_get_messages', 'get_user_agent', 'yyds_pick_domain', '_pick_list_payload', 'get_email_and_token', 'release_email_lease', 'get_oai_code', 'get_cloudflare_auth_mode', 'pick_domain', 'get_tempmail_api_base', 'get_tempmail_proxy', '_tempmail_proxies', 'tempmail_get_messages', 'tempmail_get_message_detail', 'tempmail_poll_code', '_get_tempmail_runtime'}
 
 
 _RUNTIME_DEPENDENCIES = (
     "http_get", "http_post", "sleep_with_cancel", "raise_if_cancelled",
-    "outlook_runtime", "domain_allocator",
+    "outlook_runtime", "tempmail_runtime", "domain_allocator",
 )
 
 
@@ -383,7 +383,7 @@ def cloudflare_get_domains(api_base, api_key=None):
     resp.raise_for_status()
     return _pick_list_payload(resp.json())
 
-def cloudflare_get_message_detail(api_base, token, message_id):
+def cloudflare_get_message_detail(api_base, token, message_id, proxies=None):
     headers = {"Authorization": f"Bearer {token}"}
     candidates = [
         f"{api_base}/api/mail/{message_id}",
@@ -396,6 +396,7 @@ def cloudflare_get_message_detail(api_base, token, message_id):
                 url,
                 headers=headers,
                 params=cloudflare_apply_auth_params(),
+                proxies=proxies,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -407,12 +408,12 @@ def cloudflare_get_message_detail(api_base, token, message_id):
             continue
     raise Exception(f"Cloudflare 获取邮件详情失败: {last_err}")
 
-def cloudflare_get_messages(api_base, token):
+def cloudflare_get_messages(api_base, token, proxies=None):
     headers = {"Authorization": f"Bearer {token}"}
     path = get_cloudflare_path("cloudflare_path_messages", "/messages")
     params = {"limit": 20, "offset": 0}
     params = cloudflare_apply_auth_params(params)
-    resp = http_get(f"{api_base}{path}", headers=headers, params=params)
+    resp = http_get(f"{api_base}{path}", headers=headers, params=params, proxies=proxies)
     resp.raise_for_status()
     try:
         data = resp.json()
@@ -428,8 +429,14 @@ def cloudflare_get_oai_code(
     log_callback=None,
     cancel_callback=None,
     resend_callback=None,
+    api_base=None,
+    fetch_messages=None,
+    fetch_detail=None,
 ):
-    api_base = get_cloudflare_api_base()
+    # api_base/fetch_messages/fetch_detail 允许其他 provider（tempmail）复用同一轮询循环。
+    api_base = api_base if api_base is not None else get_cloudflare_api_base()
+    fetch_messages = fetch_messages or cloudflare_get_messages
+    fetch_detail = fetch_detail or cloudflare_get_message_detail
     if not api_base:
         raise Exception("Cloudflare API Base 未配置")
     deadline = time.time() + timeout
@@ -447,7 +454,7 @@ def cloudflare_get_oai_code(
                     log_callback(f"[Debug] 触发重发验证码失败: {exc}")
             next_resend_at = time.time() + 35
         try:
-            messages = cloudflare_get_messages(api_base, dev_token)
+            messages = fetch_messages(api_base, dev_token)
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] Cloudflare 拉取邮件列表失败: {exc}")
@@ -479,7 +486,7 @@ def cloudflare_get_oai_code(
             detail_attempt = _detail_retry_attempt(detail_retries, msg_id)
             if detail_attempt:
                 try:
-                    detail = cloudflare_get_message_detail(api_base, dev_token, msg_id)
+                    detail = fetch_detail(api_base, dev_token, msg_id)
                     detail_subject, detail_body = normalize_mail_message(detail)
                     if detail_body:
                         combined += "\n" + detail_body
@@ -545,6 +552,87 @@ def cloudflare_next_default_domain():
     domain = domains[_cf_domain_index % len(domains)]
     _cf_domain_index += 1
     return domain
+
+# ---------------------------------------------------------------- 临时邮箱池（mail.zrf.me）
+
+def get_tempmail_api_base():
+    return str(config.get("tempmail_api_base", "") or "").strip().rstrip("/")
+
+def get_tempmail_proxy():
+    return str(config.get("tempmail_proxy", "") or "").strip()
+
+def _tempmail_proxies():
+    proxy = get_tempmail_proxy()
+    if not proxy:
+        # 显式空 dict：临时邮箱 API 不走注册代理链，避免住宅代理出口被站点拒绝。
+        return {}
+    return {"http": proxy, "https": proxy}
+
+def tempmail_get_messages(api_base, jwt):
+    headers = {"Authorization": f"Bearer {jwt}"}
+    resp = http_get(
+        f"{api_base.rstrip('/')}/api/mails",
+        headers=headers,
+        params={"limit": 20, "offset": 0},
+        proxies=_tempmail_proxies(),
+    )
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+    except Exception:
+        raise Exception(f"Temp Mail messages 返回非JSON: {resp.text[:300]}")
+    return _pick_list_payload(data)
+
+def tempmail_get_message_detail(api_base, jwt, message_id):
+    headers = {"Authorization": f"Bearer {jwt}"}
+    last_err = None
+    for url in (
+        f"{api_base.rstrip('/')}/api/mail/{message_id}",
+        f"{api_base.rstrip('/')}/api/mails/{message_id}",
+    ):
+        try:
+            resp = http_get(url, headers=headers, proxies=_tempmail_proxies())
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                return data["data"]
+            return data
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise Exception(f"Temp Mail 获取邮件详情失败: {last_err}")
+
+def tempmail_poll_code(
+    jwt,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+    resend_callback=None,
+):
+    """复用 cloudflare 轮询循环读取 mail-api.zrf.me 验证码。"""
+    api_base = get_tempmail_api_base()
+    if not api_base:
+        raise Exception("Temp Mail API Base 未配置")
+    return cloudflare_get_oai_code(
+        jwt,
+        email,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        log_callback=log_callback,
+        cancel_callback=cancel_callback,
+        resend_callback=resend_callback,
+        api_base=api_base,
+        fetch_messages=tempmail_get_messages,
+        fetch_detail=tempmail_get_message_detail,
+    )
+
+def _get_tempmail_runtime():
+    runtime = globals().get("tempmail_runtime")
+    if runtime is None:
+        raise RuntimeError("临时邮箱池运行时未初始化")
+    return runtime
 
 def cloudmail_build_headers():
     """Build the official Cloud Mail public API headers.
@@ -1060,6 +1148,8 @@ def get_email_and_token(api_key=None):
     provider = get_email_provider()
     if provider == "outlook":
         return _get_outlook_runtime().acquire()
+    if provider == "tempmail":
+        return _get_tempmail_runtime().acquire()
     if provider == "yyds":
         return yyds_get_email_and_token(api_key=api_key, jwt=get_yyds_jwt())
     if provider == "cloudmail":
@@ -1122,9 +1212,12 @@ def get_email_and_token(api_key=None):
     return address, token
 
 def release_email_lease(dev_token, email):
-    if get_email_provider() != "outlook":
-        return False
-    return _get_outlook_runtime().release_before_submit(dev_token, email)
+    provider = get_email_provider()
+    if provider == "outlook":
+        return _get_outlook_runtime().release_before_submit(dev_token, email)
+    if provider == "tempmail":
+        return _get_tempmail_runtime().release_before_submit(dev_token, email)
+    return False
 
 
 def get_email_provider():
@@ -1154,6 +1247,16 @@ def get_oai_code(
     provider = get_email_provider()
     if provider == "outlook":
         return _get_outlook_runtime().wait_for_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+            resend_callback=resend_callback,
+        )
+    if provider == "tempmail":
+        return _get_tempmail_runtime().wait_for_code(
             dev_token,
             email,
             timeout=timeout,

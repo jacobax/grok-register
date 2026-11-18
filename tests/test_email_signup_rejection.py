@@ -1,5 +1,6 @@
 """Issue #110: recognize explicit xAI email signup refusal without changing normal retries."""
 import json
+import itertools
 import unittest
 from unittest.mock import Mock, patch
 
@@ -32,7 +33,9 @@ class EmailSignupRejectionTests(unittest.TestCase):
 
     def test_entry_refusal_stops_before_mailbox_creation(self):
         page = Mock()
-        page.run_js.side_effect = ["Sign up with email", REJECTION]
+        page.run_js.side_effect = itertools.chain(
+            ["Sign up with email"], itertools.repeat(REJECTION)
+        )
         create_mail = Mock()
         with patch.object(registration_browser, "page", page), \
              patch.object(registration_browser, "_run_pre_submit_js", return_value="Sign up with email"), \

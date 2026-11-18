@@ -55,7 +55,8 @@ class ProxyManagerRegressionTests(unittest.TestCase):
             cfg = dict(DEFAULT_CONFIG, proxy_mode="single",
                        proxy="http://127.0.0.1:8011",
                        proxy_pool_state_file=path, proxy_pool_persist_health=True,
-                       proxy_pool_probe_interval_sec=0)
+                       proxy_pool_probe_interval_sec=0,
+                       proxy_pool_preflight_enabled=False)
             old = get_manager(cfg)
             lease = old.acquire("a", "worker", 1, 1, "session", timeout=1)
             old.report_success(lease)
@@ -122,6 +123,7 @@ class ProxyManagerRegressionTests(unittest.TestCase):
             source = Path(directory) / "pool.txt"
             source.write_text("http://127.0.0.1:8011\n", encoding="utf-8")
             cfg = dict(DEFAULT_CONFIG, proxy_mode="pool", proxy_pool_file=str(source),
+                       proxy_pool_preflight_enabled=False,
                        proxy_pool_probe_interval_sec=0, proxy_fallback="single",
                        proxy="socks5://127.0.0.1:1080")
             manager = ProxyPoolManager(cfg)

@@ -19,7 +19,7 @@ class PostModularizationRegressionTests(unittest.TestCase):
     def test_signup_url_preserves_redirect(self):
         self.assertEqual(
             registration_browser.SIGNUP_URL,
-            "https://accounts.x.ai/sign-up?redirect=grok-com",
+            "https://grok.com/",
         )
 
     def test_config_identity_survives_load(self):

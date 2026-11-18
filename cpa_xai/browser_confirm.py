@@ -281,6 +281,128 @@ def _wait_turnstile(page: Any, log: LogFn, timeout_sec: float, email: str = "", 
     return False
 
 
+def _turnstile_widget_rect(page: Any):
+    """定位 Turnstile 挂件屏幕坐标（JS shadow 穿透优先，closed shadow DOM 走 AX 兜底）。"""
+    try:
+        rect = page.run_js(
+            r"""
+function isVisible(node) {
+    if (!node) return false;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+}
+const found = [];
+const walk = (root) => {
+    try {
+        root.querySelectorAll('iframe').forEach((f) => {
+            if ((f.src || '').includes('challenges.cloudflare.com')) found.push(f);
+        });
+        root.querySelectorAll('[data-sitekey]').forEach((b) => found.push(b));
+    } catch (e) {}
+    try {
+        root.querySelectorAll('*').forEach((el) => {
+            if (el.shadowRoot) walk(el.shadowRoot);
+        });
+    } catch (e) {}
+};
+walk(document);
+const targets = found.filter(isVisible);
+if (!targets.length) return null;
+const t = targets[targets.length - 1];
+const r = t.getBoundingClientRect();
+const dx = (window.outerWidth - window.innerWidth) / 2;
+const dy = window.outerHeight - window.innerHeight;
+return {x: window.screenX + dx + r.x + r.width / 2,
+        y: window.screenY + dy + r.y + r.height / 2,
+        dpr: window.devicePixelRatio || 1,
+        src: (t.tagName === 'IFRAME' ? (t.src || '').slice(0, 60) : 'sitekey-box')};
+""",
+        )
+        if rect:
+            return rect
+    except Exception:
+        pass
+    try:
+        page.run_cdp("DOM.enable")
+        page.run_cdp("Accessibility.enable")
+        ax = page.run_cdp("Accessibility.getFullAXTree")
+    except Exception:
+        return None
+    for node in ax.get("nodes", []):
+        if (node.get("role") or {}).get("value") != "Iframe":
+            continue
+        name = (node.get("name") or {}).get("value") or ""
+        if "cloudflare" not in name.lower():
+            continue
+        bid = node.get("backendDOMNodeId")
+        if not bid:
+            continue
+        try:
+            box = page.run_cdp("DOM.getBoxModel", backendNodeId=bid)
+        except Exception:
+            continue
+        quad = (box.get("model") or {}).get("content") or []
+        if len(quad) < 8:
+            continue
+        xs, ys = quad[0::2], quad[1::2]
+        w, h = max(xs) - min(xs), max(ys) - min(ys)
+        if w < 50 or h < 20:
+            continue
+        cx, cy = min(xs) + 24, (max(ys) + min(ys)) / 2
+        try:
+            geo = page.run_js(
+                "(()=>({dx:(window.outerWidth-window.innerWidth)/2,"
+                "dy:window.outerHeight-window.innerHeight,"
+                "sx:window.screenX,sy:window.screenY,"
+                "dpr:window.devicePixelRatio||1}))()",
+                as_expr=True,
+            ) or {}
+        except Exception:
+            geo = {}
+        return {
+            "x": geo.get("sx", 0) + geo.get("dx", 0) + cx,
+            "y": geo.get("sy", 0) + geo.get("dy", 0) + cy,
+            "dpr": geo.get("dpr", 1),
+            "src": "ax-iframe",
+        }
+    return None
+
+
+def _solve_turnstile_active(page: Any, log: LogFn, tries: int = 4) -> bool:
+    """原生点击 Turnstile 挂件并等待 token（auth.x.ai approve 页需要交互验证）。"""
+    deadline = time.time() + 75.0
+    for _ in range(tries):
+        if time.time() >= deadline:
+            break
+        rect = _turnstile_widget_rect(page)
+        if rect:
+            try:
+                from tempmail_creator import native_click
+
+                native_click(rect["x"], rect["y"], dpr=rect.get("dpr", 1), log_callback=log)
+                log("[cpa] Turnstile 原生点击 (%.0f,%.0f) via %s" % (
+                    rect["x"], rect["y"], rect.get("src", "")))
+            except Exception as exc:
+                log("[cpa] Turnstile 原生点击失败: %s" % exc)
+            wait_deadline = time.time() + 15.0
+            while time.time() < wait_deadline:
+                try:
+                    token_length = page.run_js(
+                        'const input = document.querySelector(\'input[name="cf-turnstile-response"]\');'
+                        "return String((input && input.value) || '').trim().length;"
+                    )
+                    if int(token_length or 0) >= 80:
+                        log("[cpa] Turnstile 已通过")
+                        return True
+                except Exception:
+                    pass
+                _sleep(1.0)
+        _sleep(2.0)
+    return False
+
+
 def _fill(page: Any, selector: str, value: str, log: LogFn, label: str = "") -> bool:
     try:
         target = page.ele(selector, timeout=0.8)
@@ -419,6 +541,12 @@ def approve_device_code(
             if _dismiss_cookie_banner(page, logger):
                 _sleep(0.6)
                 continue
+        if "could not verify this browser" in text or "request could not be verified" in text:
+            phase = "consent"
+            logger("[cpa] approve 页要求浏览器验证，主动解算 Turnstile ...")
+            _solve_turnstile_active(page, logger)
+            _sleep(2.5)
+            continue
         if "/consent" in url or "授权 Grok Build" in text or "Authorize Grok Build" in text:
             phase = "consent"
             if _cookie_banner_visible(_visible_text(page)):
@@ -439,20 +567,16 @@ def approve_device_code(
                     if (!form) return;
                     const formText = (form.innerText || '');
                     if (formText.includes('隐私偏好') || formText.includes('全部允许') || /cookie/i.test(formText)) return;
-                    let actionInput = form.querySelector('input[name=action]');
-                    if (!actionInput) {
-                      actionInput = document.createElement('input');
-                      actionInput.type = 'hidden';
-                      actionInput.name = 'action';
-                      form.appendChild(actionInput);
-                    }
-                    actionInput.value = 'allow';
+                    // 不追加 action 字段：重复追加会被服务器以
+                    // "duplicate field action" 拒绝，只在原生字段已存在时更新。
+                    const actionInput = form.querySelector('input[name=action]');
+                    if (actionInput) actionInput.value = 'allow';
                     const button = [...form.querySelectorAll('button')].find((b) => {
                       const text = (b.innerText || '').trim();
                       return text === '允许' || text === 'Allow' || text === 'Authorize' || text === 'Approve';
                     });
                     if (button) button.click();
-                    else form.submit();
+                    else if (actionInput) form.submit();
                     """
                 )
                 _sleep(2.5)

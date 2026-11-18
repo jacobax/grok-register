@@ -15,6 +15,7 @@ from proxy_pool import (
 class ProxyPoolTests(unittest.TestCase):
     def _config(self, **updates):
         cfg = dict(DEFAULT_CONFIG)
+        updates.setdefault("proxy_pool_preflight_enabled", False)
         cfg.update(updates)
         return validate_config_structure(cfg)
 

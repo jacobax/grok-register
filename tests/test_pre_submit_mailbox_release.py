@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import patch
 
 import registration_browser
-from registration_flow import _set_registration_stage, current_registration_stage
+from registration_flow import (
+    EmailSignupUnavailable,
+    _set_registration_stage,
+    current_registration_stage,
+)
 
 
 class PreSubmitMailboxReleaseTests(unittest.TestCase):
@@ -35,6 +39,22 @@ class PreSubmitMailboxReleaseTests(unittest.TestCase):
 
         self.assertEqual(released, [])
 
+
+    def test_email_signup_rejection_releases_mailbox_lease(self):
+        released = []
+
+        def reject_after_submit(*_args, **_kwargs):
+            _set_registration_stage("email_submit")
+            raise EmailSignupUnavailable("Email sign-up isn't available right now.")
+
+        with patch.object(registration_browser, "raise_if_cancelled", return_value=None, create=True), \
+             patch.object(registration_browser, "get_email_and_token", return_value=("user@example.com", "outlook:handle"), create=True), \
+             patch.object(registration_browser, "_fill_email_form", side_effect=reject_after_submit, create=True), \
+             patch.object(registration_browser, "release_email_lease", side_effect=lambda token, email: released.append((token, email)), create=True):
+            with self.assertRaises(EmailSignupUnavailable):
+                registration_browser.fill_email_and_submit()
+
+        self.assertEqual(released, [("outlook:handle", "user@example.com")])
 
 if __name__ == "__main__":
     unittest.main()

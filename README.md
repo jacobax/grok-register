@@ -4,7 +4,7 @@
 
 <p><strong>简体中文</strong> | <a href="README.en.md">English</a></p>
 
-Grok Register 是基于 Python 和 Chromium 的注册自动化工具，提供 GUI、CLI、WebUI、五种邮箱来源、可选并发与代理池，并支持 SSO 风控、账号持久化、pending 恢复、grok2api 入池和 CPA/OIDC 导出。
+Grok Register 是基于 Python 和 Chromium 的注册自动化工具，提供 GUI、CLI、WebUI、六种邮箱来源、可选并发与代理池，并支持 SSO 风控、账号持久化、pending 恢复、grok2api 入池和 CPA/OIDC 导出。
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -86,7 +86,7 @@ Grok Register 使用真实 Chromium / Chrome 完成注册流程，并把 GUI、C
 主要功能：
 
 - 自动打开注册页、提交邮箱、轮询验证码、填写资料并获取 SSO cookie。
-- 支持 **DuckMail / YYDS / Cloudflare 临时邮箱 / Cloud Mail / Outlook 邮箱池** 五种邮箱来源。
+- 支持 **DuckMail / YYDS / Cloudflare 临时邮箱 / Cloud Mail / Outlook 邮箱池 / 临时邮箱池（mail.zrf.me）** 六种邮箱来源。
 - 支持 **GUI / CLI / WebUI** 三种操作入口。
 - 支持可选 **1–8 线程并发注册**；默认关闭。
 - 支持 `direct / single / pool` 代理模式、健康检查、冷却、订阅、固定/旋转节点和账号级稳定 Proxy Lease。
@@ -295,7 +295,7 @@ SQLite 账号支持正常邮箱密码重新登录、SSO 更新、旧版 TXT 文�
 
 | 配置项 | 说明 |
 | --- | --- |
-| `email_provider` | `duckmail` / `yyds` / `cloudflare` / `cloudmail` / `outlook` |
+| `email_provider` | `duckmail` / `yyds` / `cloudflare` / `cloudmail` / `outlook` / `tempmail` |
 | `register_count` | 本批次注册数量 |
 | `enable_nsfw` | 注册后是否尝试开启 NSFW |
 | `sso_risk_gate_enabled` | 入库前是否检查 grok.com `botFlagSource` / `policy=deny`，默认 `true` |
@@ -358,6 +358,37 @@ email----password----clientId----refreshToken----auto
 - Outlook 的 access token / refresh token 不会写入 `mail_credentials.txt` 或 `config.json`；OAuth 刷新返回新 refresh token 时，会尝试更新邮箱池文件。邮箱池原子写入并尽量设为 `0600`，且已加入 `.gitignore`。
 
 GUI 的“管理 Outlook 邮箱池”和 WebUI 邮箱池编辑区都提供健康检查，可在不触发 xAI 注册的情况下验证各邮箱的 IMAP/Graph 可用性；检查结果只返回邮箱、模式、通道状态和文件夹等安全元数据。Web 接口仅监听本机，并对邮箱池相关响应设置 `no-store`。
+
+#### 临时邮箱池（mail.zrf.me）
+
+`tempmail` 模式对接自建 / 第三方 [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) 站点（默认 mail.zrf.me）。邮箱通过**真实浏览器**在站点 UI 上创建（Turnstile 人机验证需要 OS 级真实鼠标点击，JS/CDP 合成点击拿不到 token），创建结果（地址 + 读取邮件用的 JWT）持久化在本地邮箱池文件中，注册时从池中领取。
+
+```json
+{
+  "email_provider": "tempmail",
+  "tempmail_api_base": "https://mail-api.zrf.me",
+  "tempmail_ui_base": "https://mail.zrf.me",
+  "tempmail_pool_file": "./output/mailboxes/tempmail-pool.txt",
+  "tempmail_domains": "itzrf.com,zrfme.com,zrfme.top,zrfme.net,zrfme.de",
+  "tempmail_proxy": ""
+}
+```
+
+| 配置项 | 说明 |
+| --- | --- |
+| `tempmail_api_base` | 站点后端 API（用于读取验证码邮件与拉取域名） |
+| `tempmail_ui_base` | 站点 UI 地址，创建邮箱的浏览器会打开它 |
+| `tempmail_pool_file` | 邮箱池文件路径 |
+| `tempmail_domains` | 创建邮箱使用的域名，逗号分隔；留空时自动从站点拉取 |
+| `tempmail_proxy` | 可选；仅作用于创建邮箱的浏览器和邮件 API 请求（注册代理不受影响） |
+
+邮箱池每行格式：`email----password----jwt`（password 可为空）。
+
+- 在 GUI“管理临时邮箱池”对话框或 WebUI 邮箱池页面点击“创建邮箱”，输入数量后会启动一个独立的有头 Chromium，在 mail.zrf.me 上逐个过 Turnstile 创建邮箱并写入池文件。该功能需要**桌面环境**（真实鼠标输入），无头模式（`GROK_REGISTER_CHROMIUM_HEADLESS=1`）下会被拒绝。
+- Windows 直接支持原生点击；Linux 需要 `xdotool`；macOS 需要授予终端辅助功能权限。浏览器窗口被完全遮挡、最小化或屏幕锁定时点击会失败。
+- 注册任务的邮箱用量上限为池内可用邮箱数；领取后立即从池文件移除，提交注册表单前失败会自动归还，开始读取验证码后一次性消费。
+- 验证码读取走 `GET /api/mails`（JWT Bearer 认证），与站点的 Turnstile 无关；轮询逻辑复用 Cloudflare 临时邮箱实现（重发触发、详情重试、xAI 验证码提取）。
+- GUI/WebUI 的“测试邮箱池”会逐个用池内 JWT 请求 `/api/mails` 验证凭据可用性。
 
 #### Cloudflare 临时邮箱
 

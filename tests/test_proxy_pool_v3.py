@@ -29,7 +29,7 @@ class RetryNeeded(Exception):
 
 class ProxyPoolV3Tests(unittest.TestCase):
     def cfg(self, **updates):
-        value = dict(DEFAULT_CONFIG)
+        value = dict(DEFAULT_CONFIG, proxy_pool_preflight_enabled=False)
         value.update(updates)
         return value
 

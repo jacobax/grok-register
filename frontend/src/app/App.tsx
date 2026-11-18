@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api, post, put,
   type Config, type ConfigValue, type HealthReport, type LogEntry,
-  type MailboxPool, type MailboxTest, type ProxyNode, type ProxyPreflightResult,
+  type MailboxPool, type MailboxTest, type ProxyNode, type ProxyPoolFile, type ProxyPreflightResult,
   type ProxySnapshot, type TaskStatus,
 } from '../lib/api'
 import { configGroups, type ConfigField, type Language } from './configFields'
@@ -59,6 +59,16 @@ const copy = {
     language: '语言', general: '基础设置', mail: '邮箱服务', grok2api: 'Grok2API 集成', cpa: 'CPA / OIDC 集成',
     unsaved: '有未保存的修改', proxyActionFailed: '代理池操作失败', mailboxSaved: '邮箱池已保存',
     mailboxTested: '邮箱池测试完成', preflightDone: '注册路径预检结果', preflightPassed: '注册路径预检通过', preflightFailed: '注册路径预检未通过',
+    tempmailFormat: '每行格式：email----password----jwt',
+    tempmailNote: 'tempmail 模式：通过“创建邮箱”按钮驱动真实浏览器在 mail.zrf.me 创建邮箱（需要桌面环境与真实鼠标），注册时从池中领取。',
+    fillMailboxes: '创建邮箱',
+    fillCountLabel: '创建数量',
+    filling: '正在创建…',
+    fillDone: '临时邮箱池补充完成',
+    fillFailed: '临时邮箱创建失败',
+    proxyPoolData: '代理节点列表',
+    proxyPoolFormat: '每行一个代理：vless://… vmess://… trojan://… ss://… socks5://… http://…（支持订阅内容粘贴）',
+    proxyPoolSaved: '代理池已保存',
     reachable: '网络可达', notReachable: '网络不可达', cloudflareBlock: '检测到 Cloudflare 拦截', noJob: '当前没有运行中的任务',
     stopSent: '已发送停止请求', copied: '日志已复制', copyFailed: '复制失败',
     saving: '正在保存…', checking: '正在检查…', starting: '正在启动…',
@@ -101,6 +111,16 @@ const copy = {
     language: 'Language', general: 'General', mail: 'Email services', grok2api: 'Grok2API integration', cpa: 'CPA / OIDC integration',
     unsaved: 'You have unsaved changes', proxyActionFailed: 'Proxy pool operation failed', mailboxSaved: 'Mailbox pool saved',
     mailboxTested: 'Mailbox pool test completed', preflightDone: 'Registration path preflight result', preflightPassed: 'Registration path preflight passed', preflightFailed: 'Registration path preflight failed',
+    tempmailFormat: 'One row: email----password----jwt',
+    tempmailNote: 'tempmail mode: mailboxes are created on mail.zrf.me by a real browser via the Create button (desktop session and real mouse required); registration leases from the pool.',
+    fillMailboxes: 'Create mailboxes',
+    fillCountLabel: 'Count',
+    filling: 'Creating…',
+    fillDone: 'Temp mail pool refilled',
+    fillFailed: 'Temp mailbox creation failed',
+    proxyPoolData: 'Proxy nodes',
+    proxyPoolFormat: 'One node per line: vless://… vmess://… trojan://… ss://… socks5://… http://… (subscription content works too)',
+    proxyPoolSaved: 'Proxy pool saved',
     reachable: 'Reachable', notReachable: 'Unreachable', cloudflareBlock: 'Cloudflare block detected', noJob: 'No registration job is running',
     stopSent: 'Stop request sent', copied: 'Logs copied', copyFailed: 'Copy failed',
     saving: 'Saving…', checking: 'Checking…', starting: 'Starting…',
@@ -279,9 +299,12 @@ function OverviewPage({ status, logs, health, language, onNavigate }: {
   </div>
 }
 
-function ProxyPage({ snapshot, preflight, busy, language, onAction }: {
+function ProxyPage({ snapshot, preflight, busy, language, pool, poolDirty, onPoolReload, onPoolSave, onPoolDataChange, onPoolPathChange, onAction }: {
   snapshot: ProxySnapshot | null; preflight: ProxyPreflightResult | null
   busy: boolean; language: Language
+  pool: ProxyPoolFile | null; poolDirty: boolean
+  onPoolReload: () => void; onPoolSave: () => void
+  onPoolDataChange: (value: string) => void; onPoolPathChange: (value: string) => void
   onAction: (action: 'reload' | 'test' | 'preflight', nodeId?: string) => void
 }) {
   const nodes = snapshot?.nodes || []
@@ -295,6 +318,19 @@ function ProxyPage({ snapshot, preflight, busy, language, onAction }: {
       (probe.latency_ms ? ' · ' + probe.latency_ms + 'ms' : '') + (probe.exit_ip ? ' · ' + probe.exit_ip : '')
   }
   return <div className="page-stack">
+    <section className="surface mailbox-editor">
+      <div className="surface-heading"><div><h2>{t(language, 'proxyPoolData')}</h2><p>{t(language, 'proxyPoolFormat')}</p></div>{poolDirty && <span className="dirty-count">{t(language, 'unsaved')}</span>}</div>
+      <label className="config-field"><span className="field-label">{t(language, 'mailboxPath')}</span>
+        <input value={pool?.path || ''} disabled={busy || !pool} onChange={event => onPoolPathChange(event.target.value)} spellCheck={false} /></label>
+      <label className="config-field mailbox-textarea"><span className="field-label">{t(language, 'proxyPoolData')}</span>
+        <textarea value={pool?.data || ''} disabled={busy || !pool} onChange={event => onPoolDataChange(event.target.value)} spellCheck={false} autoComplete="off" /></label>
+      <div className="mailbox-actions"><div className="toolbar-actions">
+        <button className="button button-quiet" type="button" disabled={busy} onClick={onPoolReload}>{t(language, 'loadPool')}</button>
+        <button className="button button-primary" type="button" disabled={busy || !pool || !pool.data.trim()} onClick={onPoolSave}>{busy ? t(language, 'saving') : t(language, 'savePool')}</button>
+      </div></div>
+      {pool && pool.count > 0 && <p className="muted">{pool.count} · {pool.protocols}{pool.invalid ? ' · ' + t(language, 'invalid') + ' ' + pool.invalid : ''}</p>}
+      {pool && pool.errors.length > 0 && <p className="validation-error">{pool.errors.join(' · ')}</p>}
+    </section>
     <div className="section-toolbar"><div><span className="eyebrow">NETWORK / PROBES</span><p className="muted">{snapshot?.mode || '—'} · {nodes.length} nodes</p></div>
       <div className="toolbar-actions">
         <button className="button button-quiet" type="button" disabled={busy} onClick={() => onAction('reload')}>{t(language, 'reload')}</button>
@@ -372,23 +408,39 @@ function ProxyPage({ snapshot, preflight, busy, language, onAction }: {
   </div>
 }
 
-function MailboxPage({ pool, test, language, busy, dirty, onReload, onSave, onTest, onDataChange, onPathChange }: {
+function MailboxPage({ pool, test, language, busy, dirty, mode, fillCount, onFillCountChange, onReload, onSave, onTest, onFill, onDataChange, onPathChange }: {
   pool: MailboxPool | null; test: MailboxTest | null; language: Language; busy: boolean; dirty: boolean
-  onReload: () => void; onSave: () => void; onTest: () => void
+  mode: 'outlook' | 'tempmail'; fillCount: string
+  onFillCountChange: (value: string) => void
+  onReload: () => void; onSave: () => void; onTest: () => void; onFill: () => void
   onDataChange: (value: string) => void; onPathChange: (value: string) => void
 }) {
+  const fill = pool?.fill
   return <div className="page-stack">
+    {mode === 'tempmail' && <section className="surface">
+      <div className="surface-heading"><div><h2>mail.zrf.me</h2><p>{t(language, 'tempmailNote')}</p></div></div>
+    </section>}
     <section className="surface mailbox-editor">
-      <div className="surface-heading"><div><h2>{t(language, 'mailboxData')}</h2><p>{t(language, 'mailboxFormat')}</p></div>{dirty && <span className="dirty-count">{t(language, 'unsaved')}</span>}</div>
+      <div className="surface-heading"><div><h2>{t(language, 'mailboxData')}</h2><p>{mode === 'tempmail' ? t(language, 'tempmailFormat') : t(language, 'mailboxFormat')}</p></div>{dirty && <span className="dirty-count">{t(language, 'unsaved')}</span>}</div>
       <label className="config-field"><span className="field-label">{t(language, 'mailboxPath')}</span>
         <input value={pool?.path || ''} disabled={busy || !pool} onChange={event => onPathChange(event.target.value)} spellCheck={false} /></label>
       <label className="config-field mailbox-textarea"><span className="field-label">{t(language, 'mailboxData')}</span>
         <textarea value={pool?.data || ''} disabled={busy || !pool} onChange={event => onDataChange(event.target.value)} spellCheck={false} autoComplete="off" /></label>
       <div className="mailbox-actions"><div className="toolbar-actions">
+        {mode === 'tempmail' && <>
+          <input className="fill-count-input" type="number" min={1} max={100} value={fillCount} disabled={busy}
+            onChange={event => onFillCountChange(event.target.value)} aria-label={t(language, 'fillCountLabel')} />
+          <button className="button button-primary" type="button" disabled={busy} onClick={onFill}>{fill?.running ? t(language, 'filling') : t(language, 'fillMailboxes')}</button>
+        </>}
         <button className="button button-quiet" type="button" disabled={busy} onClick={onReload}>{t(language, 'loadPool')}</button>
         <button className="button button-quiet" type="button" disabled={busy || !pool} onClick={onTest}>{busy ? t(language, 'checking') : t(language, 'testPool')}</button>
       </div><button className="button button-primary" type="button" disabled={busy || !pool || !pool.data.trim()} onClick={onSave}>{busy ? t(language, 'saving') : t(language, 'savePool')}</button></div>
     </section>
+    {fill && (fill.running || fill.error) && <section className="surface">
+      <div className="surface-heading"><div><h2>{t(language, 'fillMailboxes')}</h2><p>{fill.target}</p></div></div>
+      {fill.running ? <p className="muted">{fill.created}/{fill.target}</p> : null}
+      {fill.error ? <p className="validation-error">{t(language, 'fillFailed')}: {fill.error}</p> : null}
+    </section>}
     <section className="metric-grid mailbox-metrics">
       <Metric label={t(language, 'count')} value={pool?.count || 0} />
       <Metric label={t(language, 'invalid')} value={pool?.invalid || 0} tone={pool?.invalid ? 'tone-bad' : ''} />
@@ -397,12 +449,14 @@ function MailboxPage({ pool, test, language, busy, dirty, onReload, onSave, onTe
       {test && <Metric label={t(language, 'unhealthyMail')} value={test.unhealthy} tone={test.unhealthy ? 'tone-bad' : ''} />}
     </section>
     {pool?.duplicates.length ? <section className="surface"><div className="surface-heading"><h2>{t(language, 'duplicates')}</h2></div><p className="muted">{pool.duplicates.join(' · ')}</p></section> : null}
-    {test && <section className="surface"><div className="surface-heading"><div><h2>{t(language, 'testResults')}</h2><p>{test.healthy}/{test.count} · IMAP {test.imap} · Graph {test.graph}</p></div></div>
-      <div className="mail-test-list">{test.results.map(item => <article className="mail-test-row" key={item.email + ':' + item.mode}>
-        <div><strong>{item.email}</strong><small>{item.mode.toUpperCase()}</small></div>
+    {test && <section className="surface"><div className="surface-heading"><div><h2>{t(language, 'testResults')}</h2><p>{mode === 'tempmail' ? `${test.healthy}/${test.count}` : `${test.healthy}/${test.count} · IMAP ${test.imap ?? '—'} · Graph ${test.graph ?? '—'}`}</p></div></div>
+      <div className="mail-test-list">{test.results.map(item => <article className="mail-test-row" key={item.email + ':' + (item.mode || 'tempmail')}>
+        <div><strong>{item.email}</strong><small>{(item.mode || (mode === 'tempmail' ? 'JWT' : '')).toUpperCase()}</small></div>
         <span className={'health-tag ' + (item.usable ? 'ok' : 'error')}>{item.usable ? t(language, 'usable') : t(language, 'notUsable')}</span>
-        <div className="mail-channel"><strong>{t(language, 'imap')}</strong><span>{item.imap?.ok ? 'OK' : item.imap?.error || '—'}</span></div>
-        <div className="mail-channel"><strong>{t(language, 'graph')}</strong><span>{item.graph?.ok ? 'OK' : item.graph?.error || '—'}</span></div>
+        {mode === 'outlook' ? <>
+          <div className="mail-channel"><strong>{t(language, 'imap')}</strong><span>{item.imap?.ok ? 'OK' : item.imap?.error || '—'}</span></div>
+          <div className="mail-channel"><strong>{t(language, 'graph')}</strong><span>{item.graph?.ok ? 'OK' : item.graph?.error || '—'}</span></div>
+        </> : <div className="mail-channel"><strong>JWT</strong><span>{item.usable ? 'OK' : item.error || '—'}</span></div>}
       </article>)}</div>
     </section>}
   </div>
@@ -456,6 +510,8 @@ export function App() {
   const [health, setHealth] = useState<HealthReport | null>(null)
   const [proxy, setProxy] = useState<ProxySnapshot | null>(null)
   const [proxyPreflight, setProxyPreflight] = useState<ProxyPreflightResult | null>(null)
+  const [proxyPool, setProxyPool] = useState<ProxyPoolFile | null>(null)
+  const [proxyPoolDirty, setProxyPoolDirty] = useState(false)
   const [mailbox, setMailbox] = useState<MailboxPool | null>(null)
   const [mailboxDirty, setMailboxDirty] = useState(false)
   const [mailboxTest, setMailboxTest] = useState<MailboxTest | null>(null)
@@ -465,6 +521,7 @@ export function App() {
   const [healthBusy, setHealthBusy] = useState(false)
   const [proxyBusy, setProxyBusy] = useState(false)
   const [mailboxBusy, setMailboxBusy] = useState(false)
+  const [fillCount, setFillCount] = useState('10')
   const lastSeq = useRef(0)
   const serverLatest = useRef(0)
   const configRequestVersion = useRef(0)
@@ -524,12 +581,49 @@ export function App() {
     setProxy(data)
   }, [])
 
+  const refreshProxyPool = useCallback(async () => {
+    const data = await api<ProxyPoolFile & { ok: boolean }>('/api/proxies/pool')
+    setProxyPool(data)
+    setProxyPoolDirty(false)
+  }, [])
+
+  const proxyPoolAction = async (action: 'reload' | 'save') => {
+    if (action === 'save' && !proxyPool) return
+    setProxyBusy(true)
+    try {
+      if (action === 'reload') {
+        await refreshProxyPool()
+        setNotice({ text: t(language, 'loadPool') })
+      } else if (proxyPool) {
+        const result = await put<{ ok: boolean; path: string; count: number; protocols: string }>('/api/proxies/pool', {
+          path: proxyPool.path, data: proxyPool.data,
+        })
+        setProxyPool(previous => previous ? {
+          ...previous, path: result.path, count: result.count, protocols: result.protocols,
+          invalid: 0, errors: [],
+        } : previous)
+        setConfig(previous => ({ ...previous, proxy_pool_file: result.path }))
+        setProxyPoolDirty(false)
+        setNotice({ text: t(language, 'proxyPoolSaved') })
+        await proxyAction('reload')
+      }
+    } catch (error) {
+      setNotice({ text: errorMessage(error), error: true })
+    } finally {
+      setProxyBusy(false)
+    }
+  }
+
+
+  const mailboxMode = config.email_provider === 'tempmail' ? 'tempmail' : 'outlook'
+
   const refreshMailbox = useCallback(async () => {
-    const data = await api<MailboxResponse>('/api/mailboxes/outlook')
+    const path = config.email_provider === 'tempmail' ? '/api/mailboxes/tempmail' : '/api/mailboxes/outlook'
+    const data = await api<MailboxResponse>(path)
     setMailbox(data)
     setMailboxDirty(false)
     setMailboxTest(null)
-  }, [])
+  }, [config.email_provider])
 
   useEffect(() => {
     localStorage.setItem('grok_register_lang', language)
@@ -547,9 +641,10 @@ export function App() {
   useEffect(() => {
     if (page !== 'proxy') return
     void refreshProxy().catch(error => setNotice({ text: errorMessage(error), error: true }))
+    void refreshProxyPool().catch(error => setNotice({ text: errorMessage(error), error: true }))
     const timer = window.setInterval(() => { void refreshProxy().catch(() => undefined) }, 5000)
     return () => window.clearInterval(timer)
-  }, [page, refreshProxy])
+  }, [page, refreshProxy, refreshProxyPool])
 
   useEffect(() => {
     if (page !== 'mailbox' || mailbox || mailboxDirty) return
@@ -674,30 +769,52 @@ export function App() {
     if (action !== 'reload' && !mailbox) return
     if (action === 'test') setMailboxTest(null)
     setMailboxBusy(true)
+    const savePath = mailboxMode === 'tempmail' ? '/api/mailboxes/tempmail' : '/api/mailboxes/outlook'
+    const testPath = mailboxMode === 'tempmail' ? '/api/mailboxes/tempmail/test' : '/api/mailboxes/outlook/test'
+    const pathKey = mailboxMode === 'tempmail' ? 'tempmail_pool_file' : 'outlook_accounts_file'
     try {
       if (action === 'reload') {
         await refreshMailbox()
         setNotice({ text: t(language, 'loadPool') })
       } else if (action === 'save' && mailbox) {
-        const result = await put<{ ok: boolean; path: string; count: number; accounts?: MailboxPool['accounts'] }>('/api/mailboxes/outlook', {
+        const result = await put<{ ok: boolean; path: string; count: number; accounts?: MailboxPool['accounts'] }>(savePath, {
           path: mailbox.path, data: mailbox.data,
         })
         setMailbox(previous => previous ? {
           ...previous, path: result.path, count: result.count, invalid: 0, duplicates: [],
           accounts: result.accounts,
         } : previous)
-        setConfig(previous => ({ ...previous, outlook_accounts_file: result.path }))
+        setConfig(previous => ({ ...previous, [pathKey]: result.path }))
         setHealth(null)
         setMailboxDirty(false)
         setMailboxTest(null)
         setNotice({ text: t(language, 'mailboxSaved') })
       } else if (mailbox) {
-        const result = await post<MailboxTest>('/api/mailboxes/outlook/test', { data: mailbox.data })
+        const result = await post<MailboxTest>(testPath, { data: mailbox.data })
         setMailboxTest(result)
         setNotice({ text: t(language, 'mailboxTested'), error: result.unhealthy > 0 })
       }
     } catch (error) {
       setNotice({ text: errorMessage(error), error: true })
+    } finally {
+      setMailboxBusy(false)
+      void refreshStatus()
+    }
+  }
+
+  const fillMailboxes = async () => {
+    const count = Math.max(1, Math.min(100, parseInt(fillCount, 10) || 0))
+    if (!count) {
+      setNotice({ text: t(language, 'fillCountLabel') + ': 1-100', error: true })
+      return
+    }
+    setMailboxBusy(true)
+    try {
+      await post<{ ok: boolean }>('/api/mailboxes/tempmail/fill', { count })
+      setNotice({ text: t(language, 'fillMailboxes') + ' × ' + count })
+      window.setTimeout(() => { void refreshMailbox().catch(() => undefined) }, 4000)
+    } catch (error) {
+      setNotice({ text: errorMessage(error) || t(language, 'fillFailed'), error: true })
     } finally {
       setMailboxBusy(false)
       void refreshStatus()
@@ -782,9 +899,15 @@ export function App() {
           onChange={changeConfig} onSave={() => void saveConfig()}
           onDiscard={() => { void refreshConfig().catch(error => setNotice({ text: errorMessage(error), error: true })) }}
           onReload={() => { void refreshConfig().catch(error => setNotice({ text: errorMessage(error), error: true })) }} />}
-        {page === 'proxy' && <ProxyPage snapshot={proxy} preflight={proxyPreflight} busy={proxyBusy || isBusy || saving} language={language} onAction={(action, nodeId) => void proxyAction(action, nodeId)} />}
+        {page === 'proxy' && <ProxyPage snapshot={proxy} preflight={proxyPreflight} busy={proxyBusy || isBusy || saving} language={language}
+          pool={proxyPool} poolDirty={proxyPoolDirty}
+          onPoolReload={() => void proxyPoolAction('reload')} onPoolSave={() => void proxyPoolAction('save')}
+          onPoolDataChange={value => { setProxyPool(previous => previous ? { ...previous, data: value } : previous); setProxyPoolDirty(true) }}
+          onPoolPathChange={value => { setProxyPool(previous => previous ? { ...previous, path: value } : previous); setProxyPoolDirty(true) }}
+          onAction={(action, nodeId) => void proxyAction(action, nodeId)} />}
         {page === 'mailbox' && <MailboxPage pool={mailbox} test={mailboxTest} language={language} busy={mailboxBusy || isBusy || saving} dirty={mailboxDirty}
-          onReload={() => void mailboxAction('reload')} onSave={() => void mailboxAction('save')} onTest={() => void mailboxAction('test')}
+          mode={mailboxMode} fillCount={fillCount} onFillCountChange={setFillCount}
+          onReload={() => void mailboxAction('reload')} onSave={() => void mailboxAction('save')} onTest={() => void mailboxAction('test')} onFill={() => void fillMailboxes()}
           onDataChange={value => { setMailbox(previous => previous ? { ...previous, data: value } : previous); setMailboxTest(null); setMailboxDirty(true) }}
           onPathChange={value => { setMailbox(previous => previous ? { ...previous, path: value } : previous); setMailboxDirty(true) }} />}
         {page === 'console' && <ConsolePage logs={logs} language={language} onClear={() => void clearLogs()} onCopy={entries => void copyLogs(entries)} />}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import deque
 import ipaddress
 import json
 import os
@@ -89,6 +90,7 @@ class ProxyNode:
     ipv6_probe: ProbeFamilyState = field(default_factory=ProbeFamilyState)
     inflight: int = 0
     retired: bool = False
+    lease_marks: deque = field(default_factory=lambda: deque(maxlen=8))
 
 
 @dataclass
@@ -266,6 +268,11 @@ class ProxyPoolManager:
         self.refresh_interval = max(0, int(self.config.get("proxy_pool_refresh_interval_sec", 900)))
         self.probe_interval = max(0, int(self.config.get("proxy_pool_probe_interval_sec", 900)))
         self.probe_timeout = max(3, int(self.config.get("proxy_pool_probe_timeout_sec") or 15))
+        self.preflight_enabled = bool(self.config.get("proxy_pool_preflight_enabled", True))
+        self._preflight_cache = {}
+        self.preflight_cache_ttl = 1800
+        self.prefer_low_latency = bool(self.config.get("proxy_pool_prefer_low_latency", True))
+        self.spread_window_sec = max(0, int(self.config.get("proxy_pool_spread_window_sec") or 180))
         self.persist_health = bool(self.config.get("proxy_pool_persist_health", False))
         self.subscription_public_only = bool(self.config.get("proxy_pool_subscription_public_only", False))
         state_file = str(self.config.get("proxy_pool_state_file") or "./proxy_pool_state.json").strip()
@@ -574,6 +581,14 @@ class ProxyPoolManager:
         now = time.time()
         best_tier = min(self._probe_tier(node, now) for node in nodes)
         pool = sorted((node for node in nodes if self._probe_tier(node, now) == best_tier), key=lambda value: value.id)
+        if self.prefer_low_latency and len(pool) > 1:
+            def rank(node):
+                # 短时避让：窗口内用过的节点让位，避免短时间内集中同一出口
+                recent = 1 if (node.lease_marks and now - node.lease_marks[-1] < self.spread_window_sec) else 0
+                unhealthy = 0 if (node.rotating or node.health >= 0.8) else 1
+                latency = node.probe_latency_ms if node.probe_latency_ms else 1 << 30
+                return (unhealthy, recent, latency, node.id)
+            return min(pool, key=rank)
         digest = hashlib.sha256(str(affinity or "").encode("utf-8")).digest()
         selected = pool[int.from_bytes(digest[:8], "big") % len(pool)]
         if selected.rotating or selected.health >= 0.8 or len(pool) == 1:
@@ -620,6 +635,31 @@ class ProxyPoolManager:
             self._condition.notify_all()
         self._save_state_file()
 
+    def _preflight_gate(self, node, session_key):
+        """注册路径预检门禁（带缓存）。返回 (ok, reason)。仅 preflight_enabled 时调用。"""
+        now = time.time()
+        cached = self._preflight_cache.get(node.id)
+        if cached and cached.get("ok") and now - float(cached.get("at") or 0) < self.preflight_cache_ttl:
+            return True, ""
+        if cached and not cached.get("ok") and now - float(cached.get("at") or 0) < 60:
+            return False, str(cached.get("reason") or "")
+        try:
+            result = self.preflight_node(node.id)
+        except Exception as exc:
+            ok, reason = False, safe_proxy_error_text(exc)[:240]
+        else:
+            ok = bool(result.get("ok"))
+            reason = "; ".join(
+                "%s: %s" % (
+                    t.get("url"),
+                    t.get("error") or ("http %s" % t.get("status_code")),
+                )
+                for t in result.get("targets", [])
+                if not t.get("usable")
+            )[:240] or "unusable"
+        self._preflight_cache[node.id] = {"at": now, "ok": ok, "reason": reason}
+        return ok, reason
+
     def acquire(self, affinity, worker_key, slot_index, attempt_index, session_key, timeout=None, cancel_callback=None):
         if not self.managed:
             return None
@@ -656,8 +696,26 @@ class ProxyPoolManager:
                     detail = ": %s" % last_runtime_error if last_runtime_error else ""
                     raise ProxyPoolError("代理池当前没有可用节点%s" % detail)
                 raise ProxyAcquireTimeout("等待可用代理超时")
+            if self.preflight_enabled and selected is not None:
+                ok, reason = self._preflight_gate(selected, session_key)
+                if not ok:
+                    with self._condition:
+                        selected.inflight = max(0, selected.inflight - 1)
+                        node = self._nodes.get(selected.id)
+                        if node is not None:
+                            node.failure_count += 1
+                            node.last_failure_at = time.time()
+                            node.probe_status = "unavailable"
+                            node.probe_error = "preflight: %s" % reason[:240]
+                            node.cooldown_until = time.time() + min(600, 60 * (2 ** min(node.failure_count - 1, 3)))
+                        self._condition.notify_all()
+                    self._save_state_file()
+                    if time.time() >= deadline:
+                        raise ProxyPoolError("代理注册路径预检不可用: %s" % reason)
+                    continue
             try:
                 endpoint, runtime_key = self._resolve_node_endpoint(selected, session_key)
+                selected.lease_marks.append(time.time())
                 return ProxyLease(selected.id, endpoint, worker_key, slot_index, attempt_index, affinity, session_key, source_uri=selected.descriptor.raw_uri, protocol=selected.protocol, runtime_key=runtime_key)
             except Exception as exc:
                 last_runtime_error = safe_proxy_error_text(exc); self._rollback_runtime_failure(selected.id, exc)
@@ -795,6 +853,43 @@ class ProxyPoolManager:
             if runtime_key: self._runtime.release(runtime_key)
         return ProbeFamilyState(status=status, tested_at=time.time(), latency_ms=max(1, int((time.monotonic() - started) * 1000)), exit_ip=exit_ip if status == "healthy" else "", error=error[:300] if status != "healthy" else "")
 
+    def _probe_family_via_domain(self, descriptor, session_key):
+        """IP 字面量探测失败时的域名兜底。
+
+        CDN 前置中继通常按 SNI 白名单放行，会直接拒绝 1.1.1.1 这类 IP 目标
+        （TLS handshake failure），但域名目标（www.cloudflare.com）可以正常
+        出口。结果按出口 IP 实际所属的协议族返回，family 为 None 表示探测失败。
+        """
+        runtime_key = None
+        started = time.monotonic()
+        status = "unhealthy"; exit_ip = ""; error = ""; parsed_version = 0
+        try:
+            resolved = self._descriptor_for_session(descriptor, session_key)
+            proxy_url, runtime_key = self._runtime.acquire(resolved)
+            response = requests.get(
+                "https://www.cloudflare.com/cdn-cgi/trace",
+                proxies={"http": proxy_url, "https": proxy_url},
+                timeout=self.probe_timeout, allow_redirects=False,
+            )
+            if not 200 <= int(response.status_code) < 300:
+                raise ProxyPoolError("HTTP %s" % response.status_code)
+            exit_ip = self._parse_probe_ip(response)
+            try:
+                parsed_version = ipaddress.ip_address(exit_ip).version
+            except ValueError:
+                raise ProxyPoolError("探测服务返回 2xx 但没有有效 IP")
+            exit_ip = ipaddress.ip_address(exit_ip).compressed
+            status = "healthy"
+        except Exception as exc:
+            error = safe_proxy_error_text(exc)
+        finally:
+            if runtime_key:
+                self._runtime.release(runtime_key)
+        if status != "healthy" or parsed_version not in (4, 6):
+            return None, ProbeFamilyState(status="unhealthy", tested_at=time.time(), latency_ms=max(1, int((time.monotonic() - started) * 1000)), exit_ip="", error=error[:300] or "探测服务没有返回有效 IP")
+        family = "ipv4" if parsed_version == 4 else "ipv6"
+        return family, ProbeFamilyState(status="healthy", tested_at=time.time(), latency_ms=max(1, int((time.monotonic() - started) * 1000)), exit_ip=exit_ip, error="")
+
     def probe_node(self, node_id):
         with self._lock:
             node = self._nodes.get(node_id)
@@ -808,6 +903,13 @@ class ProxyPoolManager:
             with ThreadPoolExecutor(max_workers=2, thread_name_prefix="proxy-family-probe") as executor:
                 futures = {executor.submit(self._probe_family, descriptor, session_key, family): family for family in families}
                 for future in as_completed(futures): outcomes[futures[future]] = future.result()
+        ipv4 = outcomes.get("ipv4", ProbeFamilyState()); ipv6 = outcomes.get("ipv6", ProbeFamilyState())
+        if ipv4.status != "healthy" and ipv6.status != "healthy":
+            # CDN 前置中继会拒绝 IP 字面量目标（1.1.1.1 / v6 anycast），改用域名
+            # 目标兜底，结果归入出口 IP 实际所属的协议族。
+            fallback_family, fallback_state = self._probe_family_via_domain(descriptor, session_key)
+            if fallback_family is not None:
+                outcomes[fallback_family] = fallback_state
         ipv4 = outcomes.get("ipv4", ProbeFamilyState()); ipv6 = outcomes.get("ipv6", ProbeFamilyState())
         healthy = [value for value in (ipv4, ipv6) if value.status == "healthy"]
         status = "healthy" if healthy else "unhealthy"
@@ -884,17 +986,24 @@ class ProxyPoolManager:
             for url in ("https://accounts.x.ai/", "https://grok.com/"):
                 started = time.monotonic()
                 try:
-                    response = requests.get(url, proxies={"http": proxy_url, "https": proxy_url}, timeout=self.probe_timeout, allow_redirects=False)
+                    # 注册流程使用真实 Chromium；预检也用 chrome TLS 指纹近似浏览器
+                    # 客户端。x.ai/grok.com 对 curl/python UA 一律 403，无指纹探测
+                    # 会把任何代理都误报为 Cloudflare 拦截。
+                    response = requests.get(url, proxies={"http": proxy_url, "https": proxy_url}, timeout=self.probe_timeout, allow_redirects=False, impersonate="chrome")
                     status_code = int(response.status_code)
                     text = str(getattr(response, "text", "") or "")[:4096].lower()
                     headers = {str(k).lower(): str(v).lower() for k, v in dict(getattr(response, "headers", {}) or {}).items()}
                     cloudflare = "cloudflare" in headers.get("server", "") or "cf-error" in text or "__cf_chl" in text
                     reachable = 100 <= status_code < 600
-                    cloudflare_block = bool(cloudflare and status_code in (403, 429, 503))
-                    usable = bool(reachable and not cloudflare_block and 200 <= status_code < 400)
-                    results.append({"url": url, "reachable": reachable, "usable": usable, "status_code": status_code, "latency_ms": max(1, int((time.monotonic()-started)*1000)), "cloudflare_block": cloudflare_block, "error": ""})
+                    # CF 托管质询（Just a moment）对无 JS 的 HTTP 客户端必然出现；
+                    # 注册浏览器会自动通过它，属于可用路径而非硬拦截。硬拦截
+                    # （Attention Required / cf-error 页）才判不可用。
+                    challenge = bool(status_code in (403, 429, 503) and ("just a moment" in text or "__cf_chl" in text))
+                    cloudflare_block = bool(cloudflare and status_code in (403, 429, 503) and not challenge)
+                    usable = bool(reachable and not cloudflare_block and (200 <= status_code < 400 or challenge))
+                    results.append({"url": url, "reachable": reachable, "usable": usable, "status_code": status_code, "latency_ms": max(1, int((time.monotonic()-started)*1000)), "cloudflare_block": cloudflare_block, "challenge": challenge, "error": ""})
                 except Exception as exc:
-                    results.append({"url": url, "reachable": False, "usable": False, "status_code": 0, "latency_ms": max(1, int((time.monotonic()-started)*1000)), "cloudflare_block": False, "error": safe_proxy_error_text(exc)[:300]})
+                    results.append({"url": url, "reachable": False, "usable": False, "status_code": 0, "latency_ms": max(1, int((time.monotonic()-started)*1000)), "cloudflare_block": False, "challenge": False, "error": safe_proxy_error_text(exc)[:300]})
             return {"id": node_id, "ok": all(item["usable"] for item in results), "targets": results}
         finally:
             if runtime_key: self._runtime.release(runtime_key)

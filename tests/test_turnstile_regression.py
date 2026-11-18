@@ -104,7 +104,7 @@ class TurnstileRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(token, "ready")
-        self.assertTrue(any("请在当前浏览器窗口完成验证" in item for item in logs))
+        self.assertTrue(any("Turnstile 挂件" in item for item in logs))
 
     def test_absent_challenge_returns_to_page_re_evaluation(self):
         with patch.object(

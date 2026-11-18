@@ -9,7 +9,7 @@ from proxy_pool import ProxyPoolManager
 
 class AdvancedProxyPoolIntegrationTests(unittest.TestCase):
     def config(self, **updates):
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = dict(DEFAULT_CONFIG, proxy_pool_preflight_enabled=False)
         cfg.update(updates)
         return cfg
 

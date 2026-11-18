@@ -286,9 +286,9 @@ for _name in ['get_configured_proxy', 'get_proxies', '_parse_proxy_url', '_safe_
         globals()[_name] = _make_compat_proxy(_browser_runtime, _name, _bind_browser_runtime)
 for _name in ['resolve_grok2api_local_token_file', '_normalize_sso_token', 'add_token_to_grok2api_local_pool', 'get_grok2api_remote_api_bases', 'add_token_to_grok2api_remote_pool', 'add_token_to_grok2api_pools']:
     globals()[_name] = _make_compat_proxy(_account_outputs, _name, _bind_account_outputs)
-_MAIL_ORIGINALS = dict((name, getattr(_mail_service, name)) for name in ['_pick_list_payload', 'cloudflare_apply_auth_params', 'cloudflare_build_headers', 'cloudflare_create_account', 'cloudflare_create_temp_address', 'cloudflare_get_domains', 'cloudflare_get_message_detail', 'cloudflare_get_messages', 'cloudflare_get_oai_code', 'cloudflare_get_token', 'cloudflare_is_admin_create_path', 'cloudflare_next_default_domain', 'cloudmail_get_email_and_token', 'cloudmail_get_messages', 'cloudmail_get_oai_code', 'cloudmail_next_domain', 'create_account', 'duckmail_get_oai_code', 'extract_verification_code', 'generate_username', 'get_cloudflare_api_base', 'get_cloudflare_api_key', 'get_cloudflare_auth_mode', 'get_cloudflare_path', 'get_cloudmail_api_base', 'get_cloudmail_path', 'get_cloudmail_public_token', 'get_domains', 'get_duckmail_api_key', 'get_email_and_token', 'get_email_provider', 'release_email_lease', 'get_message_detail', 'get_messages', 'get_oai_code', 'get_token', 'get_user_agent', 'get_yyds_api_key', 'get_yyds_jwt', 'pick_domain', 'yyds_create_account', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_message_detail', 'yyds_get_messages', 'yyds_get_oai_code', 'yyds_get_token', 'yyds_pick_domain'])
+_MAIL_ORIGINALS = dict((name, getattr(_mail_service, name)) for name in ['_pick_list_payload', 'cloudflare_apply_auth_params', 'cloudflare_build_headers', 'cloudflare_create_account', 'cloudflare_create_temp_address', 'cloudflare_get_domains', 'cloudflare_get_message_detail', 'cloudflare_get_messages', 'cloudflare_get_oai_code', 'cloudflare_get_token', 'cloudflare_is_admin_create_path', 'cloudflare_next_default_domain', 'cloudmail_get_email_and_token', 'cloudmail_get_messages', 'cloudmail_get_oai_code', 'cloudmail_next_domain', 'create_account', 'duckmail_get_oai_code', 'extract_verification_code', 'generate_username', 'get_cloudflare_api_base', 'get_cloudflare_api_key', 'get_cloudflare_auth_mode', 'get_cloudflare_path', 'get_cloudmail_api_base', 'get_cloudmail_path', 'get_cloudmail_public_token', 'get_tempmail_api_base', 'get_tempmail_proxy', 'get_domains', 'get_duckmail_api_key', 'get_email_and_token', 'get_email_provider', 'release_email_lease', 'get_message_detail', 'get_messages', 'get_oai_code', 'get_token', 'get_user_agent', 'get_yyds_api_key', 'get_yyds_jwt', 'pick_domain', 'tempmail_get_messages', 'tempmail_get_message_detail', 'tempmail_poll_code', 'yyds_create_account', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_message_detail', 'yyds_get_messages', 'yyds_get_oai_code', 'yyds_get_token', 'yyds_pick_domain'])
 _MAIL_COMPAT_PROXIES = dict()
-for _name in ['_pick_list_payload', 'cloudflare_apply_auth_params', 'cloudflare_build_headers', 'cloudflare_create_account', 'cloudflare_create_temp_address', 'cloudflare_get_domains', 'cloudflare_get_message_detail', 'cloudflare_get_messages', 'cloudflare_get_oai_code', 'cloudflare_get_token', 'cloudflare_is_admin_create_path', 'cloudflare_next_default_domain', 'cloudmail_get_email_and_token', 'cloudmail_get_messages', 'cloudmail_get_oai_code', 'cloudmail_next_domain', 'create_account', 'duckmail_get_oai_code', 'extract_verification_code', 'generate_username', 'get_cloudflare_api_base', 'get_cloudflare_api_key', 'get_cloudflare_auth_mode', 'get_cloudflare_path', 'get_cloudmail_api_base', 'get_cloudmail_path', 'get_cloudmail_public_token', 'get_domains', 'get_duckmail_api_key', 'get_email_and_token', 'get_email_provider', 'release_email_lease', 'get_message_detail', 'get_messages', 'get_oai_code', 'get_token', 'get_user_agent', 'get_yyds_api_key', 'get_yyds_jwt', 'pick_domain', 'yyds_create_account', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_message_detail', 'yyds_get_messages', 'yyds_get_oai_code', 'yyds_get_token', 'yyds_pick_domain']:
+for _name in ['_pick_list_payload', 'cloudflare_apply_auth_params', 'cloudflare_build_headers', 'cloudflare_create_account', 'cloudflare_create_temp_address', 'cloudflare_get_domains', 'cloudflare_get_message_detail', 'cloudflare_get_messages', 'cloudflare_get_oai_code', 'cloudflare_get_token', 'cloudflare_is_admin_create_path', 'cloudflare_next_default_domain', 'cloudmail_get_email_and_token', 'cloudmail_get_messages', 'cloudmail_get_oai_code', 'cloudmail_next_domain', 'create_account', 'duckmail_get_oai_code', 'extract_verification_code', 'generate_username', 'get_cloudflare_api_base', 'get_cloudflare_api_key', 'get_cloudflare_auth_mode', 'get_cloudflare_path', 'get_cloudmail_api_base', 'get_cloudmail_path', 'get_cloudmail_public_token', 'get_tempmail_api_base', 'get_tempmail_proxy', 'get_domains', 'get_duckmail_api_key', 'get_email_and_token', 'get_email_provider', 'release_email_lease', 'get_message_detail', 'get_messages', 'get_oai_code', 'get_token', 'get_user_agent', 'get_yyds_api_key', 'get_yyds_jwt', 'pick_domain', 'tempmail_get_messages', 'tempmail_get_message_detail', 'tempmail_poll_code', 'yyds_create_account', 'yyds_generate_username', 'yyds_get_domains', 'yyds_get_email_and_token', 'yyds_get_message_detail', 'yyds_get_messages', 'yyds_get_oai_code', 'yyds_get_token', 'yyds_pick_domain']:
     _proxy = _make_compat_proxy(_mail_service, _name, _bind_mail_service)
     _MAIL_COMPAT_PROXIES[_name] = _proxy
     globals()[_name] = _proxy
@@ -761,17 +761,27 @@ def _screen_registered_sso(sso, email, log_callback=None):
 def resolve_registration_count(count, log_callback=None):
     requested = max(1, int(count))
     provider = str(config.get("email_provider", "") or "").strip().lower()
-    if provider != "outlook":
-        return requested
-    from outlook_mailbox_pool import get_outlook_mailbox_pool_capacity
-    available = get_outlook_mailbox_pool_capacity(config.get("outlook_accounts_file", ""))
-    effective = min(requested, int(available))
-    if effective < requested and log_callback:
-        log_callback(
-            "[*] Outlook 邮箱池有 %s 个有效账号；请求 %s 个，本次最多执行 %s 个"
-            % (available, requested, effective)
-        )
-    return effective
+    if provider == "outlook":
+        from outlook_mailbox_pool import get_outlook_mailbox_pool_capacity
+        available = get_outlook_mailbox_pool_capacity(config.get("outlook_accounts_file", ""))
+        effective = min(requested, int(available))
+        if effective < requested and log_callback:
+            log_callback(
+                "[*] Outlook 邮箱池有 %s 个有效账号；请求 %s 个，本次最多执行 %s 个"
+                % (available, requested, effective)
+            )
+        return effective
+    if provider == "tempmail":
+        from tempmail_mailbox_pool import get_tempmail_pool_capacity
+        available = get_tempmail_pool_capacity(config.get("tempmail_pool_file", ""))
+        effective = min(requested, int(available))
+        if effective < requested and log_callback:
+            log_callback(
+                "[*] 临时邮箱池有 %s 个可用邮箱；请求 %s 个，本次最多执行 %s 个"
+                % (available, requested, effective)
+            )
+        return effective
+    return requested
 
 
 def run_registration_common(count, log_callback, cancel_callback, accounts_output_file, observer):
@@ -783,9 +793,9 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
 
     provider = str(config.get("email_provider", "") or "").strip().lower()
     task_outlook_runtime = None
+    task_tempmail_runtime = None
     database = None
     registration_run_id = None
-
     try:
         database = Database(config.get("database_path") or "./data/grok-register.sqlite3")
         diagnostics_dir = os.path.join(
@@ -817,6 +827,16 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
             )
             globals()["outlook_runtime"] = task_outlook_runtime
             effective_count = min(effective_count, task_outlook_runtime.count)
+            _bind_mail_service()
+        elif provider == "tempmail":
+            from tempmail_mailbox_pool import create_tempmail_task_runtime
+            task_tempmail_runtime = create_tempmail_task_runtime(
+                config.get("tempmail_pool_file", ""),
+                log_callback=log_callback,
+                cancelled_exception=RegistrationCancelled,
+            )
+            globals()["tempmail_runtime"] = task_tempmail_runtime
+            effective_count = min(effective_count, task_tempmail_runtime.remaining)
             _bind_mail_service()
         elif provider == "cloudmail":
             _bind_mail_service()
@@ -961,6 +981,10 @@ def run_registration_common(count, log_callback, cancel_callback, accounts_outpu
             task_outlook_runtime.close()
             if globals().get("outlook_runtime") is task_outlook_runtime:
                 globals().pop("outlook_runtime", None)
+        if task_tempmail_runtime is not None:
+            task_tempmail_runtime.close()
+            if globals().get("tempmail_runtime") is task_tempmail_runtime:
+                globals().pop("tempmail_runtime", None)
 
 
 class GrokRegisterGUI:
@@ -1047,7 +1071,7 @@ class GrokRegisterGUI:
 
         add_label(0, 0, "邮箱服务商:")
         self.email_provider_var = tk.StringVar(value=config.get("email_provider", "duckmail"))
-        self.email_provider_combo = tk_option_menu(config_frame, self.email_provider_var, ["duckmail", "yyds", "cloudflare", "cloudmail", "outlook"], width=12)
+        self.email_provider_combo = tk_option_menu(config_frame, self.email_provider_var, ["duckmail", "yyds", "cloudflare", "cloudmail", "outlook", "tempmail"], width=12)
         add_field(self.email_provider_combo, 0, 1, sticky=tk.W)
 
         add_label(0, 2, "注册数量:")
@@ -1281,6 +1305,19 @@ class GrokRegisterGUI:
         )
         add_field(self.outlook_pool_btn, 22, 3, sticky=tk.W)
 
+        add_label(23, 0, "临时邮箱池:")
+        self.tempmail_pool_file_var = tk.StringVar(
+            value=str(config.get("tempmail_pool_file", "./output/mailboxes/tempmail-pool.txt"))
+        )
+        self.tempmail_pool_file_entry = tk_entry(
+            config_frame, textvariable=self.tempmail_pool_file_var, width=34
+        )
+        add_field(self.tempmail_pool_file_entry, 23, 1)
+        self.tempmail_pool_btn = tk_button(
+            config_frame, text="管理临时邮箱池", command=self.manage_tempmail_mailbox_pool
+        )
+        add_field(self.tempmail_pool_btn, 23, 3, sticky=tk.W)
+
         btn_frame = tk.Frame(main_frame, bg=UI_BG)
         btn_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 6))
         self.start_btn = tk_button(btn_frame, text="开始注册", command=self.start_registration)
@@ -1453,6 +1490,10 @@ class GrokRegisterGUI:
             "outlook_accounts_file": (
                 self.outlook_accounts_file_var.get().strip()
                 or "./output/mailboxes/outlook-accounts.txt"
+            ),
+            "tempmail_pool_file": (
+                self.tempmail_pool_file_var.get().strip()
+                or "./output/mailboxes/tempmail-pool.txt"
             ),
             "proxy": self.proxy_var.get().strip(),
             "proxy_mode": self.proxy_mode_var.get().strip() or "auto",
@@ -1652,6 +1693,185 @@ class GrokRegisterGUI:
         tk_button(buttons, text="测试邮箱池", command=test_pool).pack(side=tk.LEFT, padx=(8, 0))
         tk_button(buttons, text="关闭", command=window.destroy).pack(side=tk.RIGHT)
 
+    def manage_tempmail_mailbox_pool(self):
+        from tempmail_creator import create_tempmail_mailboxes, fetch_site_domains
+        from tempmail_mailbox_pool import (
+            append_tempmail_entries, inspect_tempmail_pool,
+            load_tempmail_pool,
+            probe_tempmail_pool_data, save_tempmail_pool,
+        )
+        path = self.tempmail_pool_file_var.get().strip() or "./output/mailboxes/tempmail-pool.txt"
+        self.tempmail_pool_file_var.set(path)
+        window = tk.Toplevel(self.root)
+        window.title("临时邮箱池 (mail.zrf.me)")
+        window.geometry("860x560")
+        window.configure(bg=UI_BG)
+        window.transient(self.root)
+
+        tk_label(
+            window,
+            text="每行格式: email----password----jwt",
+        ).pack(anchor=tk.W, padx=12, pady=(12, 4))
+        tk_label(window, text="文件: %s" % path, fg=UI_MUTED_FG).pack(
+            anchor=tk.W, padx=12, pady=(0, 8)
+        )
+        editor = scrolledtext.ScrolledText(
+            window,
+            bg="#111111", fg=UI_FG, insertbackground=UI_FG,
+            height=22, wrap=tk.NONE, undo=True,
+        )
+        editor.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+        status_var = tk.StringVar(value="")
+        tk_label(window, textvariable=status_var, fg=UI_MUTED_FG).pack(
+            anchor=tk.W, padx=12, pady=(0, 8)
+        )
+        create_running = threading.Event()
+
+        def effective_domains():
+            raw = str(config.get("tempmail_domains", "") or "")
+            domains = [x.strip().lstrip("@") for x in raw.split(",") if x.strip()]
+            if domains:
+                return domains
+            api_base = str(config.get("tempmail_api_base", "") or "").strip()
+            if api_base:
+                try:
+                    fetched = fetch_site_domains(api_base)
+                    if fetched:
+                        return fetched
+                except Exception as exc:
+                    self.log("[!] 拉取临时邮箱站点域名失败: %s" % exc)
+            raise ValueError("tempmail_domains 未配置且站点域名拉取失败")
+
+        def update_summary(_event=None):
+            summary = inspect_tempmail_pool(editor.get("1.0", tk.END))
+            status_var.set(
+                "有效: %s | 无效: %s | 重复: %s"
+                % (summary["count"], summary["invalid"], len(summary["duplicates"]))
+            )
+
+        def save_pool():
+            try:
+                summary = save_tempmail_pool(path, editor.get("1.0", tk.END))
+                update_summary()
+                self.log("[*] 临时邮箱池已保存: %s 个邮箱" % summary["count"])
+            except Exception as exc:
+                messagebox.showerror("临时邮箱池保存失败", str(exc), parent=window)
+
+        def load_pool():
+            try:
+                current = load_tempmail_pool(path)
+                editor.delete("1.0", tk.END)
+                editor.insert("1.0", current.get("data", ""))
+                update_summary()
+            except Exception as exc:
+                status_var.set("读取失败: %s" % exc)
+
+        def test_pool():
+            if self.is_running or self.registration_starting:
+                messagebox.showwarning(
+                    "临时邮箱池测试", "注册任务启动或运行期间不能测试邮箱池", parent=window
+                )
+                return
+            data = editor.get("1.0", tk.END)
+            api_base = str(config.get("tempmail_api_base", "") or "").strip()
+            proxy = str(config.get("tempmail_proxy", "") or "").strip()
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            status_var.set("正在测试临时邮箱 jwt…")
+
+            def worker():
+                try:
+                    summary = probe_tempmail_pool_data(data, api_base, proxies=proxies)
+                except Exception as exc:
+                    def show_error(error=str(exc)):
+                        status_var.set("测试失败: %s" % error)
+                        messagebox.showerror("临时邮箱池测试失败", error, parent=window)
+                    window.after(0, show_error)
+                    return
+
+                def show_result():
+                    status_var.set("可用: %s/%s" % (summary["healthy"], summary["count"]))
+                    lines = [
+                        "%s [%s]" % (item["email"], "OK" if item["usable"] else item["error"])
+                        for item in summary["results"]
+                    ]
+                    messagebox.showinfo(
+                        "临时邮箱池测试",
+                        "可用: %s/%s\n\n%s"
+                        % (summary["healthy"], summary["count"], "\n".join(lines[:100])),
+                        parent=window,
+                    )
+                window.after(0, show_result)
+
+            threading.Thread(target=worker, name="tempmail-mailbox-gui-test", daemon=True).start()
+
+        def create_pool_mailboxes():
+            if self.is_running or self.registration_starting:
+                messagebox.showwarning(
+                    "创建临时邮箱", "注册任务启动或运行期间不能创建邮箱", parent=window
+                )
+                return
+            if create_running.is_set():
+                messagebox.showwarning("创建临时邮箱", "已有创建任务在进行", parent=window)
+            try:
+                from tkinter import simpledialog
+                count = int(simpledialog.askstring(
+                    "创建临时邮箱", "要创建的邮箱数量:", parent=window
+                ) or "0")
+            except (TypeError, ValueError):
+                count = 0
+            if count <= 0:
+                return
+            api_base = str(config.get("tempmail_api_base", "") or "").strip()
+            proxy = str(config.get("tempmail_proxy", "") or "").strip()
+            ui_base = str(config.get("tempmail_ui_base", "") or "").strip()
+            try:
+                domains = effective_domains()
+            except Exception as exc:
+                messagebox.showerror("创建临时邮箱失败", str(exc), parent=window)
+                return
+            create_running.set()
+            status_var.set("正在通过浏览器创建 %s 个邮箱（需要真实鼠标点击 Turnstile）…" % count)
+
+            def worker():
+                created = []
+                error = None
+                try:
+                    created = create_tempmail_mailboxes(
+                        count,
+                        api_base=api_base,
+                        domains=domains,
+                        proxy=proxy,
+                        ui_base=ui_base,
+                        log_callback=self.log,
+                    )
+                    append_tempmail_entries(path, created)
+                except Exception as exc:
+                    error = str(exc)
+
+                def show_result():
+                    create_running.clear()
+                    if created:
+                        load_pool()
+                    if error:
+                        status_var.set("创建失败: %s" % error)
+                        messagebox.showerror("创建临时邮箱失败", error, parent=window)
+                    else:
+                        status_var.set("已创建 %s 个邮箱并写入邮箱池" % len(created))
+
+                window.after(0, show_result)
+
+            threading.Thread(target=worker, name="tempmail-mailbox-gui-create", daemon=True).start()
+
+        editor.bind("<KeyRelease>", update_summary)
+        load_pool()
+        buttons = tk.Frame(window, bg=UI_BG)
+        buttons.pack(fill=tk.X, padx=12, pady=(0, 12))
+        tk_button(buttons, text="创建邮箱(浏览器)", command=create_pool_mailboxes).pack(side=tk.LEFT)
+        tk_button(buttons, text="保存邮箱池", command=save_pool).pack(side=tk.LEFT, padx=(8, 0))
+        tk_button(buttons, text="重新加载", command=load_pool).pack(side=tk.LEFT, padx=(8, 0))
+        tk_button(buttons, text="测试邮箱池", command=test_pool).pack(side=tk.LEFT, padx=(8, 0))
+        tk_button(buttons, text="关闭", command=window.destroy).pack(side=tk.RIGHT)
+
     def test_proxy_pool(self):
         with self.operation_lock:
             if self.is_running or self.registration_starting:
@@ -1745,7 +1965,12 @@ class GrokRegisterGUI:
         config["cloudmail_public_token"] = self.cloudmail_public_token_var.get().strip()
         config["cloudmail_domains"] = self.cloudmail_domains_var.get().strip()
         config["outlook_accounts_file"] = (
-            self.outlook_accounts_file_var.get().strip() or "./output/mailboxes/outlook-accounts.txt"
+            self.outlook_accounts_file_var.get().strip()
+            or "./output/mailboxes/outlook-accounts.txt"
+        )
+        config["tempmail_pool_file"] = (
+            self.tempmail_pool_file_var.get().strip()
+            or "./output/mailboxes/tempmail-pool.txt"
         )
         config["grok2api_auto_add_local"] = bool(self.grok2api_local_auto_var.get())
         config["grok2api_local_token_file"] = self.grok2api_local_file_var.get().strip()

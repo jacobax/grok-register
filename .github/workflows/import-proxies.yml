@@ -1,0 +1,44 @@
+name: Import proxies to panel
+
+# 把已验证的 ip:port[#country] 列表批量填入 vless 模板并导入 grok-register 面板。
+# 需要的仓库 Secrets：
+#   GROK_PANEL_URL   面板地址，如 https://grok-ac.ein.us.ci
+#   GROK_PANEL_TOKEN 面板访问令牌（aws1 systemd 单元里 GROK_REGISTER_PANEL_TOKEN 的值）
+# 可选仓库 Variables：
+#   PROXY_LIST_FILE     已验证列表路径（默认 proxies_validated.txt）
+#   PROXY_TEMPLATE_FILE 模板路径（默认 proxy-template.txt）
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 21 * * *"
+  # 如需在验证工作流完成后自动执行，取消注释并把名称换成验证工作流的 name：
+  # workflow_run:
+  #   workflows: ["validate-proxies"]
+  #   types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-proxies
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate & import nodes into panel
+        env:
+          GROK_PANEL_URL: ${{ secrets.GROK_PANEL_URL }}
+          GROK_PANEL_TOKEN: ${{ secrets.GROK_PANEL_TOKEN }}
+          PROXY_LIST_FILE: ${{ vars.PROXY_LIST_FILE || 'proxies_validated.txt' }}
+          PROXY_TEMPLATE_FILE: ${{ vars.PROXY_TEMPLATE_FILE || 'proxy-template.txt' }}
+        run: |
+          python3 scripts/import_proxies.py \
+            --list "$PROXY_LIST_FILE" \
+            --template "$PROXY_TEMPLATE_FILE" \
+            --panel "$GROK_PANEL_URL" \
+            --token "$GROK_PANEL_TOKEN" \
+            --set-pool-mode

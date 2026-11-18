@@ -28,9 +28,15 @@ LOG_LIMIT = 2000
 
 app = FastAPI(title="grok-register WebUI", version="1.2")
 # TestClient uses "testserver"; production entrypoints bind to 127.0.0.1.
+# 设置 GROK_REGISTER_PANEL_HOST 后允许该主机（Cloudflare 命名隧道）访问。
+_PANEL_HOST = os.environ.get("GROK_REGISTER_PANEL_HOST", "").strip()
+_PANEL_TOKEN = os.environ.get("GROK_REGISTER_PANEL_TOKEN", "").strip()
+_allowed_hosts = ["127.0.0.1", "localhost", "testserver"]
+if _PANEL_HOST:
+    _allowed_hosts.append(_PANEL_HOST)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+    allowed_hosts=_allowed_hosts,
     www_redirect=False,
 )
 
@@ -51,6 +57,12 @@ _job_state = {
     "finished_at": None,
     "accounts_file": "",
     "error": "",
+}
+_tempmail_fill_state = {
+    "running": False,
+    "target": 0,
+    "created": 0,
+    "error": None,
 }
 
 _log_lock = threading.Lock()
@@ -243,9 +255,37 @@ def outlook_mailbox_js():
 @app.middleware("http")
 async def protect_outlook_mailbox_api(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/mailboxes/outlook"):
+    if request.url.path.startswith("/api/mailboxes/outlook") or request.url.path.startswith("/api/mailboxes/tempmail"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.middleware("http")
+async def panel_token_guard(request: Request, call_next):
+    """设置 GROK_REGISTER_PANEL_TOKEN 后，隧道等外部访问需要令牌（/health 除外）。
+
+    接受 Authorization: Bearer / ?token= / panel_token cookie 三种形态；
+    通过 ?token= 首次访问时种下 30 天 cookie，浏览器后续请求免带参数。
+    """
+    if not _PANEL_TOKEN:
+        return await call_next(request)
+    if request.url.path == "/health":
+        return await call_next(request)
+    provided = ""
+    auth_header = str(request.headers.get("authorization") or "")
+    if auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+    if not provided:
+        provided = str(request.query_params.get("token") or "").strip()
+    if not provided:
+        provided = str(request.cookies.get("panel_token") or "").strip()
+    if provided != _PANEL_TOKEN:
+        return JSONResponse({"detail": "panel token required"}, status_code=403)
+    response = await call_next(request)
+    if str(request.query_params.get("token") or "") == _PANEL_TOKEN and not request.cookies.get("panel_token"):
+        response.set_cookie("panel_token", _PANEL_TOKEN, httponly=True, samesite="lax",
+                            max_age=60 * 60 * 24 * 30, path="/")
     return response
 
 
@@ -254,11 +294,17 @@ def _require_local_origin(request: Request) -> None:
     site = str(request.headers.get("sec-fetch-site") or "").lower()
     if site and site not in {"none", "same-origin"}:
         raise HTTPException(status_code=403, detail="仅允许同源 WebUI 请求")
-    if origin and (
-        request.url.hostname not in {"127.0.0.1", "localhost", "::1"}
-        or origin != "%s://%s" % (request.url.scheme, request.url.netloc)
-    ):
-        raise HTTPException(status_code=403, detail="仅允许同源 WebUI 请求")
+    if origin:
+        scheme = request.url.scheme
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+        if forwarded_proto:
+            scheme = forwarded_proto
+        hostname = (request.url.hostname or "").lower()
+        allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+        if _PANEL_HOST:
+            allowed_hosts.add(_PANEL_HOST.lower())
+        if hostname not in allowed_hosts or origin != "%s://%s" % (scheme, request.url.netloc):
+            raise HTTPException(status_code=403, detail="仅允许同源 WebUI 请求")
 
 
 @app.get("/health")
@@ -407,6 +453,253 @@ async def test_outlook_mailboxes(request: Request):
         % (summary["healthy"], summary["count"])
     )
     return JSONResponse({"ok": True, **summary})
+
+
+@app.get("/api/mailboxes/tempmail")
+def get_tempmail_mailboxes(request: Request):
+    _require_local_origin(request)
+    from tempmail_mailbox_pool import load_tempmail_pool
+    cfg = _load_config_if_idle()
+    try:
+        summary = load_tempmail_pool(cfg.get("tempmail_pool_file", ""))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with _job_lock:
+        fill = dict(_tempmail_fill_state)
+    return JSONResponse({
+        "ok": True,
+        "path": summary["path"],
+        "data": summary["data"],
+        "count": summary["count"],
+        "invalid": summary["invalid"],
+        "duplicates": summary["duplicates"],
+        "accounts": summary["accounts"],
+        "fill": fill,
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/mailboxes/tempmail")
+async def put_tempmail_mailboxes(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
+        raise HTTPException(status_code=400, detail="请求必须包含字符串字段 data")
+    from tempmail_mailbox_pool import save_tempmail_pool
+    with _job_lock:
+        if _job_state["running"]:
+            raise HTTPException(status_code=409, detail="任务运行期间不能修改临时邮箱池")
+        if _maintenance_state is not None:
+            raise HTTPException(status_code=409, detail="维护操作期间不能修改临时邮箱池")
+        engine.load_config()
+        previous = dict(engine.config)
+        path = payload.get("path", previous.get("tempmail_pool_file", ""))
+        try:
+            candidate = engine.validate_config_structure({
+                **previous, "tempmail_pool_file": path,
+            })
+            summary = save_tempmail_pool(candidate["tempmail_pool_file"], payload["data"])
+            if candidate["tempmail_pool_file"] != previous["tempmail_pool_file"]:
+                engine.config.clear()
+                engine.config.update(candidate)
+                try:
+                    engine.save_config()
+                except Exception:
+                    engine.config.clear()
+                    engine.config.update(previous)
+                    raise
+        except (ValueError, RuntimeError, OSError, engine.ConfigError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _append_log("[*] 临时邮箱池已保存: %s 个邮箱" % summary["count"])
+    return JSONResponse({"ok": True, **summary})
+
+
+@app.post("/api/mailboxes/tempmail/test")
+async def test_tempmail_mailboxes(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
+        raise HTTPException(status_code=400, detail="请求必须包含字符串字段 data")
+    from tempmail_mailbox_pool import probe_tempmail_pool_data
+
+    cfg = _load_config_if_idle()
+    api_base = str(cfg.get("tempmail_api_base", "") or "").strip()
+    proxy = str(cfg.get("tempmail_proxy", "") or "").strip()
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    kind = "tempmail_mailbox_test"
+    _begin_maintenance(kind)
+    try:
+        try:
+            summary = await run_in_threadpool(
+                probe_tempmail_pool_data, payload["data"], api_base, proxies
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _end_maintenance(kind)
+    _append_log(
+        "[*] 临时邮箱池测试完成: %s/%s 个可用"
+        % (summary["healthy"], summary["count"])
+    )
+    return JSONResponse({"ok": True, **summary})
+
+
+@app.post("/api/mailboxes/tempmail/fill")
+async def fill_tempmail_mailboxes(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求必须是 JSON 对象")
+    try:
+        count = int(payload.get("count", 0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="count 必须是整数") from exc
+    if not 1 <= count <= 100:
+        raise HTTPException(status_code=400, detail="count 必须在 1-100 之间")
+
+    kind = "tempmail_mailbox_fill"
+    _begin_maintenance(kind)
+    with _job_lock:
+        _tempmail_fill_state.update({
+            "running": True, "target": count, "created": 0, "error": None,
+        })
+
+    def worker():
+        from tempmail_creator import create_tempmail_mailboxes, fetch_site_domains
+        from tempmail_mailbox_pool import append_tempmail_entries
+        try:
+            cfg = _load_config_if_idle()
+            domains = [
+                x.strip().lstrip("@")
+                for x in str(cfg.get("tempmail_domains", "") or "").split(",")
+                if x.strip()
+            ]
+            if not domains:
+                domains = fetch_site_domains(str(cfg.get("tempmail_api_base", "") or "").strip())
+            created = create_tempmail_mailboxes(
+                count,
+                api_base=str(cfg.get("tempmail_api_base", "") or "").strip(),
+                domains=domains,
+                proxy=str(cfg.get("tempmail_proxy", "") or "").strip(),
+                ui_base=str(cfg.get("tempmail_ui_base", "") or "").strip(),
+                log_callback=_append_log,
+            )
+            append_tempmail_entries(cfg.get("tempmail_pool_file", ""), created)
+            with _job_lock:
+                _tempmail_fill_state.update({"created": len(created)})
+            _append_log("[+] 临时邮箱池补充完成: 新建 %s 个邮箱" % len(created))
+        except Exception as exc:
+            with _job_lock:
+                _tempmail_fill_state.update({"error": str(exc)})
+            _append_log("[!] 临时邮箱创建失败: %s" % exc)
+        finally:
+            with _job_lock:
+                _tempmail_fill_state.update({"running": False})
+            _end_maintenance(kind)
+
+    threading.Thread(target=worker, name="tempmail-mailbox-fill", daemon=True).start()
+    with _job_lock:
+        return JSONResponse({"ok": True, "fill": dict(_tempmail_fill_state)})
+
+
+def _proxy_pool_summary(text):
+    """代理池文件内容摘要；空内容返回 0 节点，无可识别节点时返回错误详情。"""
+    from proxy_protocols import parse_subscription_source
+
+    raw = str(text or "").strip()
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if not raw:
+        return {"count": 0, "invalid": 0, "protocols": "", "errors": []}
+    try:
+        parsed = parse_subscription_source(raw)
+    except Exception as exc:
+        return {"count": 0, "invalid": len(lines), "protocols": "", "errors": [str(exc)[:300]]}
+    protocols = " · ".join("%s:%s" % (key, value) for key, value in sorted(parsed.protocol_counts.items()))
+    return {
+        "count": len(parsed.nodes),
+        "invalid": max(0, len(lines) - len(parsed.nodes)),
+        "protocols": protocols,
+        "errors": [str(item)[:200] for item in parsed.errors[:10]],
+    }
+
+
+@app.get("/api/proxies/pool")
+def get_proxy_pool_file(request: Request):
+    _require_local_origin(request)
+    cfg = _load_config_if_idle()
+    path = str(cfg.get("proxy_pool_file") or "").strip() or "./proxy-pool.txt"
+    resolved = os.path.abspath(os.path.expanduser(path))
+    data = ""
+    try:
+        if os.path.isfile(resolved):
+            with open(resolved, "r", encoding="utf-8", errors="replace") as handle:
+                data = handle.read((2 << 20) + 1)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="读取代理池失败: %s" % exc) from exc
+    summary = _proxy_pool_summary(data)
+    return JSONResponse({
+        "ok": True, "path": resolved, "data": data, **summary,
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/proxies/pool")
+async def put_proxy_pool_file(request: Request):
+    _require_local_origin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
+        raise HTTPException(status_code=400, detail="请求必须包含字符串字段 data")
+    data = payload["data"]
+    if not data.strip():
+        raise HTTPException(status_code=400, detail="代理池内容不能为空")
+    from proxy_protocols import parse_subscription_source
+
+    try:
+        parsed = parse_subscription_source(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="代理池内容无效: %s" % exc) from exc
+    import tempfile
+
+    with _job_lock:
+        if _job_state["running"]:
+            raise HTTPException(status_code=409, detail="任务运行期间不能修改代理池")
+        if _maintenance_state is not None:
+            raise HTTPException(status_code=409, detail="维护操作期间不能修改代理池")
+        engine.load_config()
+        previous = dict(engine.config)
+        path = str(payload.get("path") or previous.get("proxy_pool_file") or "").strip() or "./proxy-pool.txt"
+        resolved = os.path.abspath(os.path.expanduser(path))
+        tmp_path = None
+        try:
+            candidate = engine.validate_config_structure({**previous, "proxy_pool_file": path})
+            parent = os.path.dirname(resolved) or "."
+            os.makedirs(parent, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(prefix=".proxypool-", dir=parent)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(data if data.endswith("\n") else data + "\n")
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp_path, resolved)
+            tmp_path = None
+            if candidate["proxy_pool_file"] != previous["proxy_pool_file"]:
+                engine.config.clear()
+                engine.config.update(candidate)
+                try:
+                    engine.save_config()
+                except Exception:
+                    engine.config.clear()
+                    engine.config.update(previous)
+                    raise
+        except (ValueError, RuntimeError, OSError, engine.ConfigError) as exc:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    protocols = " · ".join("%s:%s" % (key, value) for key, value in sorted(parsed.protocol_counts.items()))
+    _append_log("[*] 代理池已保存: %s 个节点（%s）" % (len(parsed.nodes), protocols))
+    return JSONResponse({"ok": True, "path": resolved, "count": len(parsed.nodes), "protocols": protocols})
 
 
 @app.get("/api/proxy-pool/status")
@@ -821,3 +1114,25 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# 浏览器/代理运行时空闲回收看门狗（注册与重授权任务运行期只清理代理运行时）
+try:
+    from browser_janitor import start_janitor
+
+    def _janitor_busy():
+        with _job_lock:
+            if _job_state.get("running"):
+                return True
+        manager = _reauth_manager
+        if manager is not None:
+            try:
+                if manager.status().get("running"):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    start_janitor(busy_check=_janitor_busy, log=_append_log)
+except Exception:
+    pass

@@ -23,6 +23,11 @@ DEFAULT_CONFIG = {
     "cloudmail_domains": "",
     "cloudmail_path_messages": "/api/public/emailList",
     "outlook_accounts_file": "./output/mailboxes/outlook-accounts.txt",
+    "tempmail_api_base": "https://mail-api.zrf.me",
+    "tempmail_ui_base": "https://mail.zrf.me",
+    "tempmail_pool_file": "./output/mailboxes/tempmail-pool.txt",
+    "tempmail_domains": "itzrf.com,zrfme.com,zrfme.top,zrfme.net,zrfme.de",
+    "tempmail_proxy": "",
     "database_path": "./data/grok-register.sqlite3",
     "proxy_mode": "auto",
     "proxy": "",
@@ -151,12 +156,13 @@ def validate_config_structure(raw):
         "database_path", "grok2api_local_token_file", "api_reverse_tools", "cpa_auth_dir", "cpa_hotload_dir",
         "proxy_pool_file", "proxy_singbox_path", "proxy_pool_state_file",
         "sso_risk_rejected_file", "outlook_accounts_file",
+        "tempmail_pool_file",
     }
     for key in string_keys:
         cfg[key] = _require_string(cfg, key)
     enums = {
         "email_provider": {"duckmail", "yyds", "cloudflare", "cloudmail", "outlook"},
-        "cloudflare_auth_mode": {"query-key", "bearer", "x-api-key", "x-admin-auth", "none"},
+        "email_provider": {"duckmail", "yyds", "cloudflare", "cloudmail", "outlook", "tempmail"},
         "grok2api_pool_name": {"ssoBasic", "ssoSuper"},
         "proxy_mode": {"auto", "direct", "single", "pool"},
         "proxy_fallback": {"none", "direct", "single"},
@@ -183,6 +189,7 @@ def validate_config_structure(raw):
 
     url_keys = {
         "cloudflare_api_base", "cloudmail_api_base",
+        "tempmail_api_base", "tempmail_ui_base",
         "grok2api_remote_base", "cpa_base_url",
         "proxy_pool_subscription_url",
     }
@@ -226,6 +233,18 @@ def validate_run_requirements(cfg):
             raise ConfigError(f"Outlook 账号池校验失败: {exc}") from exc
         if int(count) <= 0:
             raise ConfigError("Outlook 账号池没有有效账号")
+
+    if provider == "tempmail":
+        path = os.path.realpath(os.path.abspath(os.path.expanduser(cfg["tempmail_pool_file"])))
+        try:
+            from tempmail_mailbox_pool import get_tempmail_pool_capacity
+            count = get_tempmail_pool_capacity(path)
+        except Exception as exc:
+            raise ConfigError(f"临时邮箱池校验失败: {exc}") from exc
+        if int(count) <= 0:
+            raise ConfigError(
+                f"临时邮箱池没有有效邮箱（{path}）；请先在邮箱池页面通过浏览器创建邮箱"
+            )
 
     if cfg["proxy_mode"] == "single" and not cfg["proxy"]:
         raise ConfigError("single 代理模式必须配置 proxy")

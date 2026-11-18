@@ -174,6 +174,7 @@ def _check_mailbox_config(config):
         "cloudflare": ("cloudflare_api_base",),
         "cloudmail": ("cloudmail_api_base", "cloudmail_public_token", "cloudmail_domains"),
         "outlook": ("outlook_accounts_file",),
+        "tempmail": ("tempmail_api_base", "tempmail_pool_file"),
     }
     if provider not in required_fields:
         return _result("mailbox", "Mailbox", "ERROR", True, "未知邮箱服务商: %s" % provider)
@@ -212,6 +213,20 @@ def _check_mailbox_config(config):
                            "Outlook 邮箱池没有有效账号")
         return _result("mailbox", "Mailbox", "OK", True,
                        "Outlook 邮箱池格式有效，共 %s 个账号；OAuth/IMAP/Graph 尚未测试" % count)
+    if provider == "tempmail":
+        try:
+            from tempmail_mailbox_pool import get_tempmail_pool_capacity
+            count = get_tempmail_pool_capacity(config["tempmail_pool_file"])
+        except Exception as exc:
+            return _result("mailbox", "Mailbox", "ERROR", True,
+                           _safe_error(exc, config))
+        if count < 1:
+            return _result(
+                "mailbox", "Mailbox", "ERROR", True,
+                "临时邮箱池没有有效邮箱；请先在邮箱池页面通过浏览器创建邮箱",
+            )
+        return _result("mailbox", "Mailbox", "OK", True,
+                       "临时邮箱池格式有效，共 %s 个可用邮箱" % count)
     return _result(
         "mailbox", "Mailbox", "OK", True,
         "%s 配置字段齐全；邮箱服务连接尚未测试" % provider,

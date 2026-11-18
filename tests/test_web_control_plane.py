@@ -10,6 +10,12 @@ try:
 except ImportError:
     TestClient = None
 
+# 本地执行过 `npm run build` 后 frontend/dist/index.html 存在，"/" 会返回 React
+# 构建（不含 legacy 注入脚本），此时 legacy index 断言不再成立。
+_FRONTEND_DIST_BUILT = (
+    Path(__file__).resolve().parents[1] / "frontend" / "dist" / "index.html"
+).exists()
+
 
 @unittest.skipIf(TestClient is None, "web dependencies not installed")
 class WebControlPlaneTests(unittest.TestCase):
@@ -72,6 +78,7 @@ class WebControlPlaneTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("web job did not finish")
 
+    @unittest.skipIf(_FRONTEND_DIST_BUILT, "frontend/dist build present; legacy index is not served")
     def test_index_and_health(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)

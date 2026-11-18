@@ -17,7 +17,7 @@ page = None
 browser_proxy_bridge = None
 browser_started_with_proxy = False
 cf_clearance = ""
-SIGNUP_URL = "https://accounts.x.ai/sign-up?redirect=grok-com"
+SIGNUP_URL = "https://grok.com/"
 
 TURNSTILE_ABSENT = "ABSENT"
 TURNSTILE_LOADING = "LOADING"
@@ -299,10 +299,24 @@ def start_browser(log_callback=None, use_proxy=True):
 def stop_browser():
     global browser, page, browser_started_with_proxy
     if browser is not None:
+        profile_dir = ""
+        try:
+            profile_dir = str(getattr(browser, "user_data_path", "") or "")
+        except Exception:
+            profile_dir = ""
         try:
             browser.quit(del_data=True)
         except Exception:
             pass
+        if profile_dir:
+            # quit 对卡死的浏览器可能留下孤儿进程；按 profile 强制清理，
+            # 防止慢节点连续重试时 chromium 堆积拖垮小机器。
+            try:
+                from tempmail_creator import _kill_profile_chrome
+
+                _kill_profile_chrome(profile_dir)
+            except Exception:
+                pass
     stop_browser_proxy_bridge()
     browser = None
     page = None
@@ -322,6 +336,15 @@ def cleanup_runtime_memory(log_callback=None, reason="定期清理"):
     except Exception as exc:
         if log_callback:
             log_callback(f"[Debug] CPA 浏览器清理失败: {exc}")
+    try:
+        from browser_janitor import kill_project_chromium
+
+        killed = kill_project_chromium()
+        if killed and log_callback:
+            log_callback(f"[*] 已强制回收残留浏览器进程: {killed}")
+    except Exception as exc:
+        if log_callback:
+            log_callback(f"[Debug] 残留浏览器回收失败: {exc}")
     collected = gc.collect()
     if log_callback:
         log_callback(f"[*] Python GC 已回收对象数: {collected}")
@@ -355,16 +378,17 @@ def _raise_if_email_signup_unavailable():
         )
 
 
-def click_email_signup_button(timeout=10, log_callback=None, cancel_callback=None):
+def click_email_signup_button(timeout=30, log_callback=None, cancel_callback=None):
+    """grok.com: 点击导航 Sign up 打开注册弹窗，并等待邮箱输入框出现。"""
     global page
     deadline = time.time() + timeout
+    attempt = 0
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
         _raise_if_email_signup_unavailable()
-        if log_callback:
-            log_callback("[Debug] 尝试查找“使用邮箱注册”按钮...")
-
-        clicked = _run_pre_submit_js(r"""
+        attempt += 1
+        clicked = page.run_js(
+            r"""
 function isVisible(node) {
     if (!node) return false;
     const style = window.getComputedStyle(node);
@@ -372,58 +396,44 @@ function isVisible(node) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-function nodeText(node) {
-    return [
-        node.innerText,
-        node.textContent,
-        node.getAttribute('aria-label'),
-        node.getAttribute('title'),
-        node.getAttribute('href'),
-    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-}
-function scoreEntry(node) {
-    const compact = nodeText(node).replace(/\s+/g, '');
-    const lower = compact.toLowerCase();
-    if (compact.includes('使用邮箱注册')) return 100;
-    if (lower.includes('signupwithemail')) return 95;
-    if (lower.includes('continuewithemail')) return 90;
-    if (lower.includes('email') && (lower.includes('sign') || lower.includes('continue') || lower.includes('use') || lower.includes('with'))) return 80;
-    if (lower === 'email' || lower.includes('邮箱')) return 70;
-    return 0;
-}
-const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-    .filter((node) => isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true')
-    .map((node) => ({ node, score: scoreEntry(node), text: nodeText(node) }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-const target = candidates[0]?.node || null;
-if (!target) {
-    return false;
-}
+const nodes = Array.from(document.querySelectorAll('a, button, [role="button"]'))
+    .filter((n) => isVisible(n) && !n.disabled);
+const target = nodes.find((n) => {
+    const t = (n.innerText || n.textContent || '').replace(/\s+/g, '').trim().toLowerCase();
+    return t === 'signup';
+});
+if (!target) return null;
 target.click();
-return candidates[0].text || true;
-        """)
-
-        if clicked:
-            if log_callback:
-                detail = f": {clicked}" if isinstance(clicked, str) else ""
-                log_callback(f"[*] 已点击「使用邮箱注册」按钮{detail}")
-            sleep_with_cancel(2, cancel_callback)
-            _raise_if_email_signup_unavailable()
-            return True
-
+return (target.getAttribute('href') || target.innerText || 'clicked').slice(0, 40);
+"""
+        )
         if log_callback:
-            current_url = page.url if page else "none"
-            log_callback(f"[Debug] 当前URL: {current_url}")
-
-        sleep_with_cancel(1, cancel_callback)
-
-    if log_callback:
-        page_html = page.html[:500] if page else "no page"
-        log_callback(f"[Debug] 页面内容片段: {page_html}")
-
+            log_callback(f"[Debug] 尝试点击 Sign up 导航 ({attempt}): {clicked}")
+        wait_deadline = time.time() + 6
+        while time.time() < wait_deadline:
+            sleep_with_cancel(0.5, cancel_callback)
+            _raise_if_email_signup_unavailable()
+            has_email = page.run_js(
+                r"""
+function isVisible(node) {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+const input = Array.from(document.querySelectorAll(
+    'input[autocomplete="email"], input[type="email"], input[placeholder*="mail" i], input[name="email"]'
+)).find(isVisible);
+return !!input;
+"""
+            )
+            if has_email:
+                if log_callback:
+                    log_callback("[*] 注册弹窗已打开（grok.com Sign up）")
+                return
     from registration_flow import RecoverablePreSubmitError
-    raise RecoverablePreSubmitError("未找到「使用邮箱注册」按钮")
+
+    raise RecoverablePreSubmitError("未能在 grok.com 打开注册弹窗（Sign up）")
+
 
 def open_signup_page(log_callback=None, cancel_callback=None):
     global browser, page
@@ -438,7 +448,7 @@ def open_signup_page(log_callback=None, cancel_callback=None):
         global page
         try:
             page = browser.get_tab(0)
-            page.get(SIGNUP_URL)
+            page.get(SIGNUP_URL, timeout=60)
         except Exception as e:
             if log_callback:
                 log_callback(f"[Debug] 打开URL异常: {e}")
@@ -502,6 +512,21 @@ def open_signup_page(log_callback=None, cancel_callback=None):
     sleep_with_cancel(2, cancel_callback)
     if log_callback:
         log_callback(f"[*] 当前URL: {page.url}")
+    try:
+        page.run_js(
+            r"""
+const nodes = Array.from(document.querySelectorAll('button, [role="button"]'));
+const target = nodes.find((n) => {
+    const t = (n.innerText || n.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return t.includes('acceptallcookies') || t.includes('rejectall');
+});
+if (target) target.click();
+return !!target;
+"""
+        )
+    except Exception:
+        pass
+    sleep_with_cancel(1, cancel_callback)
     click_email_signup_button(
         log_callback=log_callback, cancel_callback=cancel_callback
     )
@@ -555,6 +580,13 @@ def fill_email_and_submit(timeout=45, log_callback=None, cancel_callback=None, o
             email, dev_token, timeout=timeout, log_callback=log_callback,
             cancel_callback=cancel_callback, on_mail_created=on_mail_created,
         )
+    except Exception as exc:
+        from registration_flow import EmailSignupUnavailable
+
+        if isinstance(exc, EmailSignupUnavailable):
+            # xAI 已明确拒绝邮箱注册，验证码永远不会到达；归还租约避免浪费邮箱。
+            _release_email_lease(dev_token, email, log_callback)
+        raise
     finally:
         from registration_flow import current_registration_stage
         if current_registration_stage() != "email_submit":
@@ -808,20 +840,16 @@ if (inputType === 'email' && !input.checkValidity()) return false;
 const buttons = Array.from(document.querySelectorAll('button[type="submit"], button, [role="button"], input[type="submit"]'))
     .filter((node) => isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true');
 const submitButton = buttons.find((node) => {
+    const label = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return label === 'signup' || label === 'continue' || label === '注册' || label === '继续' || label === '确认';
+}) || buttons.find((node) => {
     const text = textOf(node).replace(/\s+/g, '');
     const lower = text.toLowerCase();
     return (
-        text === '注册' ||
-        text.includes('注册') ||
-        text.includes('继续') ||
-        text.includes('下一步') ||
-        text.includes('确认') ||
         lower.includes('signup') ||
         lower.includes('sign up') ||
-        lower.includes('continue') ||
-        lower.includes('next') ||
         lower.includes('createaccount') ||
-        lower.includes('submit')
+        lower.includes('next')
     );
 });
 if (submitButton) {
@@ -861,6 +889,78 @@ return 'enter';
         )
     from registration_flow import RecoverablePreSubmitError
     raise RecoverablePreSubmitError("未找到邮箱输入框或注册按钮")
+
+def _native_type_verification_code(code, log_callback=None):
+    """用 X11 原生键盘事件输入验证码（grok.com 的 OTP 组件忽略 JS 合成输入）。"""
+    global page
+    if page is None or not code:
+        return False
+    rect = page.run_js(
+        r"""
+function isVisible(node) {
+    if (!node) return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+}
+const direct = Array.from(document.querySelectorAll(
+    'input[data-input-otp="true"], input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"]'
+)).filter((n) => isVisible(n) && !n.disabled && !n.readOnly && Number(n.maxLength || 6) > 1);
+let target = direct[0] || null;
+if (!target) {
+    const boxes = Array.from(document.querySelectorAll('input')).filter(
+        (n) => isVisible(n) && Number(n.maxLength || 0) === 1);
+    target = boxes[0] || null;
+}
+if (!target) return null;
+target.focus();
+const r = target.getBoundingClientRect();
+const dx = (window.outerWidth - window.innerWidth) / 2;
+const dy = window.outerHeight - window.innerHeight;
+return {x: window.screenX + dx + r.x + r.width / 2,
+        y: window.screenY + dy + r.y + r.height / 2,
+        dpr: window.devicePixelRatio || 1};
+""",
+    )
+    if not rect:
+        return False
+    import os as _os
+    import subprocess as _subprocess
+
+    env = dict(_os.environ)
+    env.setdefault("DISPLAY", ":99")
+    scale = float(rect.get("dpr", 1) or 1)
+    px = int(float(rect["x"]) * scale)
+    py = int(float(rect["y"]) * scale)
+    _subprocess.run(
+        ["xdotool", "mousemove", str(px), str(py)],
+        env=env, timeout=10, check=True,
+        stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+    )
+    time.sleep(0.25)
+    _subprocess.run(
+        ["xdotool", "click", "1"],
+        env=env, timeout=10, check=True,
+        stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+    )
+    time.sleep(0.4)
+    _subprocess.run(
+        ["xdotool", "type", "--delay", "130", str(code)],
+        env=env, timeout=60, check=True,
+        stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+    )
+    time.sleep(0.8)
+    _subprocess.run(
+        ["xdotool", "key", "Return"],
+        env=env, timeout=10, check=True,
+        stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+    )
+    time.sleep(1.0)
+    value = page.run_js("return String((document.activeElement && document.activeElement.value) || '');")
+    ok = str(value or "").replace("-", "").strip() == str(code).strip()
+    if not ok and log_callback:
+        log_callback(f"[Debug] 原生键入后读回值不匹配: {value!r}")
+    return ok
+
 
 def fill_code_and_submit(email, dev_token, timeout=180, transition_timeout=15, log_callback=None, cancel_callback=None):
     from registration_flow import VerificationCodeUnavailable
@@ -999,6 +1099,16 @@ return 'not-ready';
             sleep_with_cancel(0.5, cancel_callback)
             continue
 
+        # grok.com 的 OTP 组件只响应可信键盘事件，JS 填入的值不会触发自动提交。
+        if str(filled).startswith("filled"):
+            try:
+                native_ok = _native_type_verification_code(clean_code, log_callback=log_callback)
+                if native_ok and log_callback:
+                    log_callback("[*] 已通过原生键盘输入验证码")
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"[Debug] 原生键入验证码失败（保留 JS 填入结果）: {exc}")
+
         clicked = page.run_js(
             r"""
 function isVisible(node) {
@@ -1016,11 +1126,13 @@ const buttons = Array.from(document.querySelectorAll('button[type=\"submit\"], b
 const btn = buttons.find((node) => {
     const t = (node.innerText || node.textContent || '').replace(/\\s+/g, '').toLowerCase();
     return (
+        t === 'verify' ||
         t.includes('确认邮箱') ||
         t.includes('继续') ||
         t.includes('下一步') ||
         t.includes('confirm') ||
         t.includes('continue') ||
+        t.includes('verify') ||
         t.includes('next')
     );
 });
@@ -1190,6 +1302,158 @@ try {
     }
 
 
+def _turnstile_widget_rect():
+    """定位 Turnstile 挂件（JS shadow 穿透优先，closed shadow DOM 走 AX 兜底）。"""
+    global page
+    if page is None:
+        return None
+    try:
+        return _turnstile_widget_rect_locked()
+    except Exception:
+        return None
+
+
+def _turnstile_widget_rect_locked():
+    rect = page.run_js(
+        r"""
+function isVisible(node) {
+    if (!node) return false;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+}
+const found = [];
+const walk = (root) => {
+    try {
+        root.querySelectorAll('iframe').forEach((f) => {
+            if ((f.src || '').includes('challenges.cloudflare.com')) found.push(f);
+        });
+        root.querySelectorAll('[data-sitekey]').forEach((b) => found.push(b));
+    } catch (e) {}
+    try {
+        root.querySelectorAll('*').forEach((el) => {
+            if (el.shadowRoot) walk(el.shadowRoot);
+        });
+    } catch (e) {}
+};
+walk(document);
+const targets = found.filter(isVisible);
+if (!targets.length) return null;
+const t = targets[targets.length - 1];
+const r = t.getBoundingClientRect();
+const dx = (window.outerWidth - window.innerWidth) / 2;
+const dy = window.outerHeight - window.innerHeight;
+return {x: window.screenX + dx + r.x + r.width / 2,
+        y: window.screenY + dy + r.y + r.height / 2,
+        dpr: window.devicePixelRatio || 1,
+        src: (t.tagName === 'IFRAME' ? (t.src || '').slice(0, 60) : 'sitekey-box')};
+"""
+    )
+    if rect:
+        return rect
+    try:
+        page.run_cdp("DOM.enable")
+        page.run_cdp("Accessibility.enable")
+        ax = page.run_cdp("Accessibility.getFullAXTree")
+    except Exception:
+        return None
+    for node in ax.get("nodes", []):
+        if (node.get("role") or {}).get("value") != "Iframe":
+            continue
+        name = (node.get("name") or {}).get("value") or ""
+        if "cloudflare" not in name.lower():
+            continue
+        bid = node.get("backendDOMNodeId")
+        if not bid:
+            continue
+        try:
+            box = page.run_cdp("DOM.getBoxModel", backendNodeId=bid)
+        except Exception:
+            continue
+        quad = (box.get("model") or {}).get("content") or []
+        if len(quad) < 8:
+            continue
+        xs, ys = quad[0::2], quad[1::2]
+        w, h = max(xs) - min(xs), max(ys) - min(ys)
+        if w < 50 or h < 20:
+            continue
+        cx, cy = min(xs) + 24, (max(ys) + min(ys)) / 2
+        try:
+            geo = page.run_js(
+                "(()=>({dx:(window.outerWidth-window.innerWidth)/2,"
+                "dy:window.outerHeight-window.innerHeight,"
+                "sx:window.screenX,sy:window.screenY,"
+                "dpr:window.devicePixelRatio||1}))()",
+                as_expr=True,
+            ) or {}
+        except Exception:
+            geo = {}
+        return {
+            "x": geo.get("sx", 0) + geo.get("dx", 0) + cx,
+            "y": geo.get("sy", 0) + geo.get("dy", 0) + cy,
+            "dpr": geo.get("dpr", 1),
+            "src": "ax-iframe",
+        }
+    return None
+
+
+def _handle_age_page(timeout=45, log_callback=None, cancel_callback=None):
+    """grok.com 创建账户后的年龄页（How old are you?）：填年龄并继续。"""
+    global page
+    deadline = time.time() + timeout
+    handled = False
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        state = page.run_js(
+            r"""
+const text = (document.body ? document.body.innerText : '').toLowerCase();
+if (text.includes('how old are you')) {
+    const inputs = Array.from(document.querySelectorAll('input')).filter((n) => {
+        if (!n.getBoundingClientRect().width) return false;
+        const t = (n.type || '').toLowerCase();
+        return !['hidden', 'submit', 'button', 'checkbox', 'radio', 'file'].includes(t) && !n.readOnly;
+    });
+    const ageInput = inputs.find((n) => String(n.autocomplete || '').toLowerCase() !== 'name')
+        || (inputs.length > 1 ? inputs[inputs.length - 1] : null);
+    if (!ageInput) return 'age-no-input';
+    const value = String(arguments[0]);
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const tracker = ageInput._valueTracker;
+    if (tracker) tracker.setValue('');
+    if (nativeSetter) nativeSetter.call(ageInput, value);
+    else ageInput.value = value;
+    ageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    ageInput.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'age-filled';
+}
+return 'no-age-page';
+""",
+            str(random.randint(21, 40)),
+        )
+        if state == "no-age-page":
+            return handled
+        if state == "age-filled":
+            handled = True
+            if log_callback:
+                log_callback("[*] 已填写年龄并提交")
+            page.run_js(
+                r"""
+const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+const target = buttons.find((n) => {
+    const t = (n.innerText || n.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return t === 'continue';
+});
+if (target && !target.disabled) target.click();
+return !!target;
+"""
+            )
+            sleep_with_cancel(4, cancel_callback)
+            continue
+        sleep_with_cancel(1, cancel_callback)
+    return handled
+
+
 def _wait_for_turnstile(log_callback=None, cancel_callback=None, timeout=60):
     """等待 Turnstile 自动完成或由用户在当前浏览器窗口完成。"""
     global page
@@ -1201,6 +1465,46 @@ def _wait_for_turnstile(log_callback=None, cancel_callback=None, timeout=60):
     started = time.time()
     last_state = None
     last_log_at = 0.0
+
+    # grok.com 注册弹窗的 Turnstile 位于 closed shadow DOM，无法被站点自动通过，
+    # 需要 X11 原生点击挂件（复用临时邮箱创建验证过的通道）。
+    solve_deadline = time.time() + min(timeout, 90.0)
+    last_click_at = 0.0
+    while time.time() < solve_deadline:
+        raise_if_cancelled(cancel_callback)
+        state = _read_turnstile_state()
+        status = state["state"]
+        if status == TURNSTILE_ABSENT:
+            return ""
+        if status == TURNSTILE_SOLVED and state["token"]:
+            if log_callback:
+                log_callback(f"[*] Cloudflare 人机验证已完成，token长度={len(state['token'])}")
+            return state["token"]
+        if status == TURNSTILE_FAILED:
+            raise Exception("Cloudflare 人机验证失败")
+        now = time.time()
+        if now - last_click_at >= 4.0:
+            rect = _turnstile_widget_rect()
+            if rect is None and log_callback:
+                log_callback(f"[*] 仍在等待 Turnstile 挂件可定位... {int(now - started)}s")
+            if rect:
+                try:
+                    from tempmail_creator import native_click as _native_click
+
+                    _native_click(
+                        rect["x"], rect["y"], dpr=rect.get("dpr", 1),
+                        log_callback=log_callback,
+                    )
+                    if log_callback:
+                        log_callback(
+                            f"[Debug] Turnstile 原生点击 ({rect['x']:.0f},{rect['y']:.0f})"
+                            f" via {rect.get('src', '')}"
+                        )
+                except Exception as exc:
+                    if log_callback:
+                        log_callback(f"[Debug] Turnstile 原生点击失败: {exc}")
+            last_click_at = now
+        sleep_with_cancel(1.0, cancel_callback)
 
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -1433,6 +1737,7 @@ return 'submitted';
             if submit_state == "submitted":
                 if log_callback:
                     log_callback(f"[*] 已填写注册资料并提交: {given_name} {family_name}")
+                _handle_age_page(log_callback=log_callback, cancel_callback=cancel_callback)
                 return {"given_name": given_name, "family_name": family_name, "password": password}
         if isinstance(submit_state, str) and submit_state.startswith("no-submit-button") and log_callback:
             visible_buttons = submit_state.split(":", 1)[1] if ":" in submit_state else ""

@@ -4,7 +4,7 @@
 
 <p><a href="README.md">简体中文</a> | <strong>English</strong></p>
 
-Grok Register is a Python-and-Chromium registration automation tool with GUI, CLI, and WebUI interfaces, five email sources, optional concurrency and proxy pools, SSO risk screening, account persistence, pending recovery, grok2api integration, and CPA/OIDC export.
+Grok Register is a Python-and-Chromium registration automation tool with GUI, CLI, and WebUI interfaces, six email sources, optional concurrency and proxy pools, SSO risk screening, account persistence, pending recovery, grok2api integration, and CPA/OIDC export.
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -86,7 +86,7 @@ Grok Register uses a real Chromium / Chrome browser to complete the registration
 Key features:
 
 - Automatically opens the registration page, submits an email address, polls for the verification code, fills in profile information, and obtains the SSO cookie.
-- Supports five email sources: **DuckMail / YYDS / Cloudflare temporary email / Cloud Mail / Outlook mailbox pool**.
+- Supports six email sources: **DuckMail / YYDS / Cloudflare temporary email / Cloud Mail / Outlook mailbox pool / Temp mail pool (mail.zrf.me)**.
 - Supports three interfaces: **GUI / CLI / WebUI**.
 - Supports optional **1–8 worker concurrent registration**; disabled by default.
 - Supports `direct / single / pool` proxy modes, health checks, cooldowns, subscriptions, fixed/rotating nodes, and stable account-level Proxy Leases.
@@ -299,7 +299,7 @@ The project performs structural validation at startup and checks fields required
 
 | Setting | Description |
 | --- | --- |
-| `email_provider` | `duckmail` / `yyds` / `cloudflare` / `cloudmail` / `outlook` |
+| `email_provider` | `duckmail` / `yyds` / `cloudflare` / `cloudmail` / `outlook` / `tempmail` |
 | `register_count` | Number of registrations in the current batch |
 | `enable_nsfw` | Whether to attempt to enable NSFW after registration |
 | `sso_risk_gate_enabled` | Whether to check grok.com `botFlagSource` / `policy=deny` before storage; default `true` |
@@ -362,6 +362,37 @@ The final column is optional and supports `auto` / `imap` / `graph`; if omitted,
 - Outlook access/refresh tokens are not saved in `mail_credentials.txt` or `config.json`. When OAuth returns a rotated refresh token, the app attempts to update the mailbox-pool file. Pool writes are atomic, use `0600` permissions where possible, and the path is covered by `.gitignore`.
 
 The GUI's "Manage Outlook Mailbox Pool" and the WebUI mailbox-pool editor both provide health checks that can verify each mailbox's IMAP/Graph availability without triggering xAI registration. Results return only safe metadata such as email address, mode, channel status, and folders. The Web interface listens only on localhost and sets `no-store` on mailbox-pool-related responses.
+
+#### Temp mail pool (mail.zrf.me)
+
+The `tempmail` mode integrates with a self-hosted / third-party [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) site (default mail.zrf.me). Mailboxes are created through a **real browser** on the site UI (the Turnstile challenge requires OS-level native mouse clicks; JS/CDP synthetic clicks never yield a token). Creation results (address + the JWT used to read mail) are persisted in a local pool file, and registration leases mailboxes from that pool.
+
+```json
+{
+  "email_provider": "tempmail",
+  "tempmail_api_base": "https://mail-api.zrf.me",
+  "tempmail_ui_base": "https://mail.zrf.me",
+  "tempmail_pool_file": "./output/mailboxes/tempmail-pool.txt",
+  "tempmail_domains": "itzrf.com,zrfme.com,zrfme.top,zrfme.net,zrfme.de",
+  "tempmail_proxy": ""
+}
+```
+
+| Setting | Description |
+| --- | --- |
+| `tempmail_api_base` | Site backend API (used to read verification mail and fetch domains) |
+| `tempmail_ui_base` | Site UI URL opened by the creator browser |
+| `tempmail_pool_file` | Mailbox pool file path |
+| `tempmail_domains` | Comma-separated domains for mailbox creation; fetched from the site automatically when empty |
+| `tempmail_proxy` | Optional; applies only to the creator browser and mail API requests (registration proxies are unaffected) |
+
+Pool line format: `email----password----jwt` (password may be empty).
+
+- Click "Create mailboxes" in the GUI "Manage Temp Mail Pool" dialog or the WebUI mailbox page, enter a count, and a dedicated headed Chromium opens mail.zrf.me, passes Turnstile per mailbox, and writes results into the pool file. This requires a **desktop session** (real mouse input); it is rejected under headless mode (`GROK_REGISTER_CHROMIUM_HEADLESS=1`).
+- Windows works out of the box; Linux needs `xdotool`; macOS needs accessibility permission for the terminal. Clicks fail when the browser window is fully covered, minimized, or the screen is locked.
+- Registration caps at the number of available pool mailboxes. A mailbox is removed from the pool file on acquisition, returned when the registration fails before submission, and consumed once verification-code polling begins.
+- Verification codes are read via `GET /api/mails` (JWT Bearer auth) and reuse the Cloudflare temporary-email polling logic (resend trigger, detail retries, xAI code extraction).
+- "Test pool" in GUI/WebUI probes each pool JWT against `/api/mails` to verify credentials.
 
 #### Cloudflare temporary email
 

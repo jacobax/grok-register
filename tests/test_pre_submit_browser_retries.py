@@ -11,18 +11,18 @@ from registration_flow import RecoverablePreSubmitError
 class PreSubmitBrowserRetryTests(unittest.TestCase):
     def test_missing_email_signup_button_is_recoverable(self):
         class Page:
-            url = "https://accounts.x.ai/sign-up"
-            html = "<html>signup page</html>"
+            url = "https://grok.com/"
+            html = "<html>grok home</html>"
 
-        clock = iter((0.0, 0.0, 2.0))
+            def run_js(self, *args, **kwargs):
+                return None
+
         with patch.object(registration_browser, "page", Page()), \
-             patch.object(registration_browser.time, "time", side_effect=lambda: next(clock)), \
-             patch.object(registration_browser, "_run_pre_submit_js", return_value=False), \
              patch.object(registration_browser, "_raise_if_email_signup_unavailable"), \
              patch.object(registration_browser, "raise_if_cancelled", return_value=None, create=True), \
              patch.object(registration_browser, "sleep_with_cancel", return_value=None, create=True):
-            with self.assertRaisesRegex(RecoverablePreSubmitError, "未找到"):
-                registration_browser.click_email_signup_button(timeout=1)
+            with self.assertRaisesRegex(RecoverablePreSubmitError, "grok.com"):
+                registration_browser.click_email_signup_button(timeout=0.2)
 
     def test_mailbox_configuration_error_is_not_wrapped_as_recoverable(self):
         with patch.object(

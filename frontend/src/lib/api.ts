@@ -162,25 +162,42 @@ export type ProxyPreflight = ProxySnapshot & {
   result: ProxyPreflightResult
 }
 
+export type ProxyPoolFile = {
+  path: string
+  data: string
+  count: number
+  invalid: number
+  protocols: string
+  errors: string[]
+}
+
 export type MailboxPool = {
   path: string
   data: string
   count: number
   invalid: number
   duplicates: string[]
-  accounts?: Array<{ email: string; mode: string }>
+  accounts?: Array<{ email: string; mode?: string }>
+  fill?: TempMailFillState
+}
+export type TempMailFillState = {
+  running: boolean
+  target: number
+  created: number
+  error: string | null
 }
 export type MailboxChannel = { ok?: boolean; folders?: string[]; error?: string }
 export type MailboxTest = {
   healthy: number
   unhealthy: number
   count: number
-  imap: number
-  graph: number
+  imap?: number
+  graph?: number
   results: Array<{
     email: string
-    mode: string
+    mode?: string
     usable: boolean
+    error?: string
     imap?: MailboxChannel
     graph?: MailboxChannel
   }>
